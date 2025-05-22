@@ -61,7 +61,7 @@ func NewLoader(
 	tracer logging.Tracer,
 ) (*Loader, error) {
 
-	sqlDB, err := sql.Open(dsn.Driver(), dsn.ConnString())
+	sqlDB, err := sql.Open(dsn.SqlDriver(), dsn.ConnString())
 	if err != nil {
 		return nil, fmt.Errorf("open db connection: %w", err)
 	}

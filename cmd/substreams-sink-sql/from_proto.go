@@ -186,7 +186,7 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 	connectionString := dsn.ConnString()
 
 	zlog.Info("connecting to db", zap.String("dsn", connectionString))
-	sqlDB, err := sql.Open(dsn.Driver(), connectionString)
+	sqlDB, err := sql.Open(dsn.SqlDriver(), connectionString)
 	if err != nil {
 		return fmt.Errorf("open db connection: %w", err)
 	}

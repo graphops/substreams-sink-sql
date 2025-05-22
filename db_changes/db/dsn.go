@@ -104,6 +104,15 @@ func (c *DSN) Driver() string {
 	return c.driver
 }
 
+// SqlDriver returns the SQL driver name that should be used with sql.Open()
+// For RisingWave, this returns "postgres" since RisingWave uses the PostgreSQL wire protocol
+func (c *DSN) SqlDriver() string {
+	if c.driver == "risingwave" {
+		return "postgres"
+	}
+	return c.driver
+}
+
 func (c *DSN) ConnString() string {
 	if c.driver == "clickhouse" {
 		for _, option := range c.options {
