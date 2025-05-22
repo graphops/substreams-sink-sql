@@ -83,7 +83,7 @@ func TestDataTypeString(t *testing.T) {
 		{TypeDouble, "DOUBLE PRECISION"},
 		{TypeBool, "BOOLEAN"},
 		{TypeVarchar, "VARCHAR"},
-		{TypeText, "TEXT"},
+		{TypeText, "VARCHAR"},
 		{TypeBytea, "BYTEA"},
 		{TypeDate, "DATE"},
 		{TypeTime, "TIME"},

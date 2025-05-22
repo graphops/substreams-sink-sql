@@ -79,7 +79,7 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 	}
 
 	sb.WriteString(" block_number INTEGER NOT NULL,")
-	sb.WriteString(" block_timestamp TIMESTAMP NOT NULL,")
+	sb.WriteString(" block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,")
 
 	if table.ChildOf != nil {
 		parentTable, parentFound := d.TableRegistry[table.ChildOf.ParentTable]

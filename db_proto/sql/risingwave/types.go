@@ -27,7 +27,7 @@ const (
 
 	// String types
 	TypeVarchar DataType = "VARCHAR" // Variable-length character string (no length limit specified)
-	TypeText    DataType = "TEXT"    // Alias for varchar in RisingWave
+	TypeText    DataType = "VARCHAR" // Use VARCHAR instead of TEXT for RisingWave compatibility
 
 	// Binary type
 	TypeBytea DataType = "BYTEA" // Binary strings (hex format)
