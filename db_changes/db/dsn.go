@@ -28,6 +28,7 @@ var driverMap = map[string]string{
 	"psql":       "postgres",
 	"postgres":   "postgres",
 	"clickhouse": "clickhouse",
+	"risingwave": "risingwave",
 }
 
 func ParseDSN(dsn string) (*DSN, error) {

@@ -16,6 +16,7 @@ import (
 	protosql "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	clickhouse "github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	schema2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	stats2 "github.com/streamingfast/substreams-sink-sql/db_proto/stats"
 	"github.com/streamingfast/substreams-sink-sql/services"
@@ -205,6 +206,17 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("creating postgres database: %w", err)
 		}
 
+	case "risingwave":
+		d, err := risingwave.NewDialectRisingwave(schema.Name, schema.TableRegistry, zlog)
+		if err != nil {
+			return fmt.Errorf("creating risingwave dialect: %w", err)
+		}
+		dialect = d
+		database, err = risingwave.NewDatabase(schemaName, d, sqlDB, outputModuleName, rootMessageDescriptor, useProtoOption, zlog)
+		if err != nil {
+			return fmt.Errorf("creating risingwave database: %w", err)
+		}
+
 	case "clickhouse":
 		d, err := clickhouse.NewDialectClickHouse(schema.Name, schema.TableRegistry, zlog)
 		if err != nil {
@@ -313,6 +325,18 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			inserter, err = postgres.NewAccumulatorInserter(database.(*postgres.Database), zlog)
+			if err != nil {
+				return fmt.Errorf("creating accumulator inserter: %w", err)
+			}
+		}
+	case "risingwave":
+		if useConstraints {
+			inserter, err = risingwave.NewRowInserter(database.(*risingwave.Database), zlog)
+			if err != nil {
+				return fmt.Errorf("creating row inserter: %w", err)
+			}
+		} else {
+			inserter, err = risingwave.NewAccumulatorInserter(database.(*risingwave.Database), zlog)
 			if err != nil {
 				return fmt.Errorf("creating accumulator inserter: %w", err)
 			}

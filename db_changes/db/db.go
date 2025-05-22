@@ -66,7 +66,7 @@ func NewLoader(
 		return nil, fmt.Errorf("open db connection: %w", err)
 	}
 
-	dialect, err := newDialect(sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
+	dialect, err := newDialect(dsn, sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
 	if err != nil {
 		return nil, fmt.Errorf("get dialect: %w", err)
 	}
@@ -113,15 +113,28 @@ func NewLoader(
 	return l, nil
 }
 
-func newDialect(driver driver.Driver, schemaName string, cursorTableName string, historyTableName string, clickHouseClusterName string) (Dialect, error) {
+func newDialect(dsn *DSN, driver driver.Driver, schemaName string, cursorTableName string, historyTableName string, clickHouseClusterName string) (Dialect, error) {
+	// Use DSN driver name first, fallback to SQL driver type for unknown DSN drivers
+	dsnDriver := dsn.Driver()
 	driverType := fmt.Sprintf("%T", driver)
-	switch driverType {
-	case "*pq.Driver":
+
+	switch dsnDriver {
+	case "postgres":
 		return NewPostgresDialect(schemaName, cursorTableName, historyTableName), nil
-	case "*clickhouse.stdDriver":
+	case "risingwave":
+		return NewRisingwaveDialect(schemaName, cursorTableName, historyTableName), nil
+	case "clickhouse":
 		return NewClickhouseDialect(schemaName, cursorTableName, clickHouseClusterName), nil
 	default:
-		return nil, fmt.Errorf("unsupported driver: %s", driverType)
+		// Fallback to driver type for unknown DSN drivers
+		switch driverType {
+		case "*pq.Driver":
+			return NewPostgresDialect(schemaName, cursorTableName, historyTableName), nil
+		case "*clickhouse.stdDriver":
+			return NewClickhouseDialect(schemaName, cursorTableName, clickHouseClusterName), nil
+		default:
+			return nil, fmt.Errorf("unsupported driver: %s (dsn: %s)", driverType, dsnDriver)
+		}
 	}
 }
 
