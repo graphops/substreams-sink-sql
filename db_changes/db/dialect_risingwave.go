@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -278,9 +279,28 @@ func (d RisingwaveDialect) historyTable(schema string) string {
 	return fmt.Sprintf("%s.%s", EscapeIdentifier(schema), EscapeIdentifier(d.historyTableName))
 }
 
+// generateHistoryID creates a unique ID for history table entries
+// using block number and a hash of the operation details
+func (d RisingwaveDialect) generateHistoryID(blockNum uint64, op, pk string) int64 {
+	// Create a hash from the operation details to ensure uniqueness within a block
+	hasher := sha256.New()
+	hasher.Write([]byte(fmt.Sprintf("%s:%s:%d", op, pk, time.Now().UnixNano())))
+	hash := hasher.Sum(nil)
+
+	// Use first 4 bytes of hash as a 32-bit number
+	hashInt := int64(hash[0])<<24 | int64(hash[1])<<16 | int64(hash[2])<<8 | int64(hash[3])
+
+	// Combine block number (shifted left) with hash to ensure global uniqueness
+	// Block number in high bits, hash in low bits
+	return (int64(blockNum) << 32) | (hashInt & 0xFFFFFFFF)
+}
+
 func (d RisingwaveDialect) saveInsert(schema string, table string, primaryKey map[string]string, blockNum uint64) string {
-	return fmt.Sprintf(`INSERT INTO %s (op,table_name,pk,block_num) values (%s,%s,%s,%d);`,
+	// Generate unique ID using block number and hash of primary key
+	id := d.generateHistoryID(blockNum, "I", primaryKeyToJSON(primaryKey))
+	return fmt.Sprintf(`INSERT INTO %s (id,op,table_name,pk,block_num) values (%d,%s,%s,%s,%d);`,
 		d.historyTable(schema),
+		id,
 		escapeStringValue("I"),
 		escapeStringValue(table),
 		escapeStringValue(primaryKeyToJSON(primaryKey)),
@@ -294,14 +314,17 @@ select CASE WHEN block_meta.id is null THEN 'I' ELSE 'U' END AS op, '"public"."b
 */
 func (d RisingwaveDialect) saveUpsert(schema string, escapedTableName string, primaryKey map[string]string, blockNum uint64) string {
 	schemaAndTable := fmt.Sprintf("%s.%s", EscapeIdentifier(schema), escapedTableName)
+	// Generate unique ID for this upsert operation
+	id := d.generateHistoryID(blockNum, "U", primaryKeyToJSON(primaryKey))
 
 	return fmt.Sprintf(`
 		WITH t as (select %s)
-		INSERT INTO %s (op,table_name,pk,prev_value,block_num)
-		SELECT CASE WHEN %s THEN 'I' ELSE 'U' END AS op, %s, %s, row_to_json(%s),%d from t left join %s.%s on %s;`,
+		INSERT INTO %s (id,op,table_name,pk,prev_value,block_num)
+		SELECT %d, CASE WHEN %s THEN 'I' ELSE 'U' END AS op, %s, %s, to_jsonb(%s),%d from t left join %s.%s on %s;`,
 
 		getPrimaryKeyFakeEmptyValues(primaryKey),
 		d.historyTable(schema),
+		id,
 
 		getPrimaryKeyFakeEmptyValuesAssertion(primaryKey, escapedTableName),
 
@@ -322,8 +345,11 @@ func (d RisingwaveDialect) saveDelete(schema string, escapedTableName string, pr
 
 func (d RisingwaveDialect) saveRow(op, schema, escapedTableName string, primaryKey map[string]string, blockNum uint64) string {
 	schemaAndTable := fmt.Sprintf("%s.%s", EscapeIdentifier(schema), escapedTableName)
-	return fmt.Sprintf(`INSERT INTO %s (op,table_name,pk,prev_value,block_num) SELECT %s,%s,%s,row_to_json(%s),%d FROM %s.%s WHERE %s;`,
+	// Generate unique ID for this operation
+	id := d.generateHistoryID(blockNum, op, primaryKeyToJSON(primaryKey))
+	return fmt.Sprintf(`INSERT INTO %s (id,op,table_name,pk,prev_value,block_num) SELECT %d,%s,%s,%s,to_jsonb(%s),%d FROM %s.%s WHERE %s;`,
 		d.historyTable(schema),
+		id,
 		escapeStringValue(op), escapeStringValue(schemaAndTable), escapeStringValue(primaryKeyToJSON(primaryKey)), escapedTableName, blockNum,
 		EscapeIdentifier(schema), escapedTableName,
 		getPrimaryKeyWhereClause(primaryKey, ""),
