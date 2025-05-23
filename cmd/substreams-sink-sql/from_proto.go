@@ -16,6 +16,7 @@ import (
 	protosql "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	clickhouse "github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	schema2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	stats2 "github.com/streamingfast/substreams-sink-sql/db_proto/stats"
 	"github.com/streamingfast/substreams-sink-sql/services"
@@ -185,9 +186,15 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 	connectionString := dsn.ConnString()
 
 	zlog.Info("connecting to db", zap.String("dsn", connectionString))
-	sqlDB, err := sql.Open(dsn.Driver(), connectionString)
+
+	sqlDB, err := sql.Open(dsn.SqlDriver(), connectionString)
 	if err != nil {
 		return fmt.Errorf("open db connection: %w", err)
+	}
+
+	// Test database connectivity immediately
+	if err := sqlDB.Ping(); err != nil {
+		return fmt.Errorf("database connection test failed: %w", err)
 	}
 
 	var dialect protosql.Dialect
@@ -203,6 +210,18 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		database, err = postgres.NewDatabase(schemaName, d, sqlDB, outputModuleName, rootMessageDescriptor, useProtoOption, zlog)
 		if err != nil {
 			return fmt.Errorf("creating postgres database: %w", err)
+		}
+
+	case "risingwave":
+		d, err := risingwave.NewDialectRisingwave(schema.Name, schema.TableRegistry, zlog)
+		if err != nil {
+			return fmt.Errorf("creating risingwave dialect: %w", err)
+		}
+		dialect = d
+
+		database, err = risingwave.NewDatabase(schemaName, d, sqlDB, outputModuleName, rootMessageDescriptor, useProtoOption, zlog)
+		if err != nil {
+			return fmt.Errorf("creating risingwave database: %w", err)
 		}
 
 	case "clickhouse":
@@ -240,6 +259,7 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("begin transaction: %w", err)
 		}
+
 		err = database.CreateDatabase(useConstraints, schemaName)
 		if err != nil {
 			database.RollbackTransaction()
@@ -253,6 +273,9 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		}
 
 		err = database.CommitTransaction()
+		if err != nil {
+			return fmt.Errorf("commit transaction: %w", err)
+		}
 
 	} else {
 		migrationNeeded := sinkInfo.SchemaHash != dialect.SchemaHash()
@@ -313,6 +336,18 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			inserter, err = postgres.NewAccumulatorInserter(database.(*postgres.Database), zlog)
+			if err != nil {
+				return fmt.Errorf("creating accumulator inserter: %w", err)
+			}
+		}
+	case "risingwave":
+		if useConstraints {
+			inserter, err = risingwave.NewRowInserter(database.(*risingwave.Database), zlog)
+			if err != nil {
+				return fmt.Errorf("creating row inserter: %w", err)
+			}
+		} else {
+			inserter, err = risingwave.NewAccumulatorInserter(database.(*risingwave.Database), zlog)
 			if err != nil {
 				return fmt.Errorf("creating accumulator inserter: %w", err)
 			}

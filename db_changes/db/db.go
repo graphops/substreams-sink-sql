@@ -61,12 +61,12 @@ func NewLoader(
 	tracer logging.Tracer,
 ) (*Loader, error) {
 
-	sqlDB, err := sql.Open(dsn.Driver(), dsn.ConnString())
+	sqlDB, err := sql.Open(dsn.SqlDriver(), dsn.ConnString())
 	if err != nil {
 		return nil, fmt.Errorf("open db connection: %w", err)
 	}
 
-	dialect, err := newDialect(sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
+	dialect, err := newDialect(dsn, sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
 	if err != nil {
 		return nil, fmt.Errorf("get dialect: %w", err)
 	}
@@ -113,15 +113,28 @@ func NewLoader(
 	return l, nil
 }
 
-func newDialect(driver driver.Driver, schemaName string, cursorTableName string, historyTableName string, clickHouseClusterName string) (Dialect, error) {
+func newDialect(dsn *DSN, driver driver.Driver, schemaName string, cursorTableName string, historyTableName string, clickHouseClusterName string) (Dialect, error) {
+	// Use DSN driver name first, fallback to SQL driver type for unknown DSN drivers
+	dsnDriver := dsn.Driver()
 	driverType := fmt.Sprintf("%T", driver)
-	switch driverType {
-	case "*pq.Driver":
+
+	switch dsnDriver {
+	case "postgres":
 		return NewPostgresDialect(schemaName, cursorTableName, historyTableName), nil
-	case "*clickhouse.stdDriver":
+	case "risingwave":
+		return NewRisingwaveDialect(schemaName, cursorTableName, historyTableName), nil
+	case "clickhouse":
 		return NewClickhouseDialect(schemaName, cursorTableName, clickHouseClusterName), nil
 	default:
-		return nil, fmt.Errorf("unsupported driver: %s", driverType)
+		// Fallback to driver type for unknown DSN drivers
+		switch driverType {
+		case "*pq.Driver":
+			return NewPostgresDialect(schemaName, cursorTableName, historyTableName), nil
+		case "*clickhouse.stdDriver":
+			return NewClickhouseDialect(schemaName, cursorTableName, clickHouseClusterName), nil
+		default:
+			return nil, fmt.Errorf("unsupported driver: %s (dsn: %s)", driverType, dsnDriver)
+		}
 	}
 }
 
@@ -140,7 +153,44 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 	if l.testTx != nil {
 		return l.testTx, nil
 	}
-	return l.DB.BeginTx(ctx, opts)
+
+	// RisingWave-specific workaround: Use autocommit mode instead of transactions
+	if l.dsn.Driver() == "risingwave" {
+		// Return a fake transaction that just wraps the connection
+		return &RisingWaveAutocommitTx{
+			conn:   l.DB,
+			logger: l.logger,
+		}, nil
+	}
+
+	tx, err := l.DB.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+// RisingWaveAutocommitTx is a fake transaction that uses autocommit mode for RisingWave
+type RisingWaveAutocommitTx struct {
+	conn   *sql.DB
+	logger *zap.Logger
+}
+
+func (tx *RisingWaveAutocommitTx) Rollback() error {
+	return nil
+}
+
+func (tx *RisingWaveAutocommitTx) Commit() error {
+	return nil
+}
+
+func (tx *RisingWaveAutocommitTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return tx.conn.ExecContext(ctx, query, args...)
+}
+
+func (tx *RisingWaveAutocommitTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return tx.conn.QueryContext(ctx, query, args...)
 }
 
 func (l *Loader) BatchBlockFlushInterval() int {
