@@ -228,7 +228,6 @@ func (s *SQLSinker) applyDatabaseChanges(dbChanges *pbdatabase.DatabaseChanges, 
 }
 
 func (s *SQLSinker) HandleBlockRangeCompletion(ctx context.Context, cursor *sink.Cursor) error {
-
 	s.logger.Info("stream completed, flushing to database", zap.Stringer("block", cursor.Block()))
 	_, err := s.loader.Flush(ctx, s.OutputModuleHash(), cursor, cursor.Block().Num())
 	if err != nil {
