@@ -38,7 +38,6 @@ func (d RisingwaveDialect) Revert(tx Tx, ctx context.Context, l *Loader, lastVal
 		lastValidFinalBlock,
 	)
 
-	l.logger.Info("RisingWave SQL [REVERT SELECT]", zap.String("sql", query))
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
 		return err
@@ -83,7 +82,6 @@ func (d RisingwaveDialect) Revert(tx Tx, ctx context.Context, l *Loader, lastVal
 		lastValidFinalBlock,
 	)
 
-	l.logger.Info("RisingWave SQL [PRUNE HISTORY]", zap.String("sql", pruneHistory))
 	_, err = tx.ExecContext(ctx, pruneHistory)
 	if err != nil {
 		return fmt.Errorf("executing pruneHistory: %w", err)
@@ -112,10 +110,6 @@ func (d RisingwaveDialect) Flush(tx Tx, ctx context.Context, l *Loader, outputMo
 				l.logger.Debug("adding query from operation to transaction", zap.Stringer("op", entry), zap.String("query", query))
 			}
 
-			l.logger.Info("RisingWave SQL [FLUSH OPERATION]",
-				zap.String("sql", query),
-				zap.String("operation", string(entry.opType)),
-				zap.String("table", tableName))
 			if _, err := tx.ExecContext(ctx, query); err != nil {
 				return 0, fmt.Errorf("executing query %q: %w", query, err)
 			}
@@ -142,8 +136,6 @@ func (d RisingwaveDialect) revertOp(tx Tx, ctx context.Context, op, escaped_tabl
 			escaped_table_name,
 			getPrimaryKeyWhereClause(pkmap, ""),
 		)
-		// Note: Using global logger since revertOp doesn't have access to context logger
-		zap.L().Info("RisingWave SQL [REVERT DELETE]", zap.String("sql", query))
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("executing revert query %q: %w", query, err)
 		}
@@ -153,8 +145,6 @@ func (d RisingwaveDialect) revertOp(tx Tx, ctx context.Context, op, escaped_tabl
 			escaped_table_name,
 			escapeStringValue(prev_value),
 		)
-		// Note: Using global logger since revertOp doesn't have access to context logger
-		zap.L().Info("RisingWave SQL [REVERT INSERT]", zap.String("sql", query))
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("executing revert query %q: %w", query, err)
 		}
@@ -173,8 +163,6 @@ func (d RisingwaveDialect) revertOp(tx Tx, ctx context.Context, op, escaped_tabl
 			escapeStringValue(prev_value),
 			getPrimaryKeyWhereClause(pkmap, ""),
 		)
-		// Note: Using global logger since revertOp doesn't have access to context logger
-		zap.L().Info("RisingWave SQL [REVERT UPDATE]", zap.String("sql", query))
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("executing revert query %q: %w", query, err)
 		}
@@ -186,8 +174,6 @@ func (d RisingwaveDialect) revertOp(tx Tx, ctx context.Context, op, escaped_tabl
 
 func (d RisingwaveDialect) pruneReversibleSegment(tx Tx, ctx context.Context, schema string, highestFinalBlock uint64) error {
 	query := fmt.Sprintf(`DELETE FROM %s WHERE block_num <= %d;`, d.historyTable(schema), highestFinalBlock)
-	// Note: Using global logger since pruneReversibleSegment doesn't have access to context logger
-	zap.L().Info("RisingWave SQL [PRUNE SEGMENT]", zap.String("sql", query))
 	if _, err := tx.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("executing prune query %q: %w", query, err)
 	}
@@ -208,8 +194,6 @@ func (d RisingwaveDialect) GetCreateCursorQuery(schema string, withPostgraphile 
 		out += fmt.Sprintf("COMMENT ON TABLE %s.%s IS E'@omit';",
 			EscapeIdentifier(schema), EscapeIdentifier(d.cursorTableName))
 	}
-	// Note: This query will be executed elsewhere, logged when GetCreateCursorQuery is called
-	zap.L().Info("RisingWave SQL [CREATE CURSOR TABLE]", zap.String("sql", out))
 	return out
 }
 
@@ -232,13 +216,10 @@ func (d RisingwaveDialect) GetCreateHistoryQuery(schema string, withPostgraphile
 		out += fmt.Sprintf("COMMENT ON TABLE %s.%s IS E'@omit';",
 			EscapeIdentifier(schema), EscapeIdentifier(d.historyTableName))
 	}
-	// Note: This query will be executed elsewhere, logged when GetCreateHistoryQuery is called
-	zap.L().Info("RisingWave SQL [CREATE HISTORY TABLE]", zap.String("sql", out))
 	return out
 }
 
 func (d RisingwaveDialect) ExecuteSetupScript(ctx context.Context, l *Loader, schemaSql string) error {
-	l.logger.Info("RisingWave SQL [SETUP SCRIPT]", zap.String("sql", schemaSql))
 	if _, err := l.ExecContext(ctx, schemaSql); err != nil {
 		return fmt.Errorf("exec schemaName: %w", err)
 	}
@@ -286,8 +267,6 @@ func (d RisingwaveDialect) CreateUser(tx Tx, ctx context.Context, l *Loader, use
 		q = fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'; GRANT ALL PRIVILEGES ON DATABASE %s TO %s;", user, pass, db, user)
 	}
 
-	// Note: Using global logger since CreateUser doesn't have access to context logger
-	zap.L().Info("RisingWave SQL [CREATE USER]", zap.String("sql", q))
 	_, err := tx.ExecContext(ctx, q)
 	if err != nil {
 		return fmt.Errorf("executing query %q: %w", q, err)

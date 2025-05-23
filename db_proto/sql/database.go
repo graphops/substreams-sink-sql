@@ -98,44 +98,27 @@ func (d *BaseDatabase) BaseClone() *BaseDatabase {
 }
 
 func (d *BaseDatabase) BeginTransaction() (err error) {
-	d.logger.Info("RisingWave DEBUG [DB BeginTransaction] - About to call DB.Begin()")
-
-	// Check connection state before beginning transaction
-	if pingErr := d.DB.Ping(); pingErr != nil {
-		d.logger.Error("RisingWave DEBUG [DB BeginTransaction] - Connection ping failed", zap.Error(pingErr))
-	} else {
-		d.logger.Info("RisingWave DEBUG [DB BeginTransaction] - Connection ping successful")
-	}
-
 	d.Tx, err = d.DB.Begin()
 	if err != nil {
-		d.logger.Error("RisingWave DEBUG [DB BeginTransaction] - DB.Begin() failed", zap.Error(err))
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
-	d.logger.Info("RisingWave DEBUG [DB BeginTransaction] - DB.Begin() success")
 	return nil
 }
 
 func (d *BaseDatabase) CommitTransaction() (err error) {
-	d.logger.Info("RisingWave DEBUG [DB CommitTransaction] - About to call Tx.Commit()")
 	err = d.Tx.Commit()
 	if err != nil {
-		d.logger.Error("RisingWave DEBUG [DB CommitTransaction] - Tx.Commit() failed", zap.Error(err))
 		return fmt.Errorf("committing transaction: %w", err)
 	}
-	d.logger.Info("RisingWave DEBUG [DB CommitTransaction] - Tx.Commit() success")
 	d.Tx = nil
 	return nil
 }
 
 func (d *BaseDatabase) RollbackTransaction() {
-	d.logger.Info("RisingWave DEBUG [DB RollbackTransaction] - About to call Tx.Rollback()")
 	err := d.Tx.Rollback()
 	if err != nil {
-		d.logger.Error("RisingWave DEBUG [DB RollbackTransaction] - Tx.Rollback() failed", zap.Error(err))
 		panic("RollbackTransaction failed: " + err.Error())
 	}
-	d.logger.Info("RisingWave DEBUG [DB RollbackTransaction] - Tx.Rollback() success")
 }
 
 func (d *BaseDatabase) Flush() (time.Duration, error) {

@@ -42,28 +42,20 @@ func NewSinker(rootMessageDescriptor *desc.MessageDescriptor, sink *sink.Sinker,
 }
 
 func (s *Sinker) Run(ctx context.Context) error {
-	s.logger.Info("RisingWave DEBUG [SINKER] - Starting sinker.Run()")
-
 	cursor, err := s.db.FetchCursor()
 	if err != nil {
-		s.logger.Error("RisingWave DEBUG [SINKER] - FetchCursor failed", zap.Error(err))
 		return fmt.Errorf("fetch cursor: %w", err)
 	}
-	s.logger.Info("RisingWave DEBUG [SINKER] - FetchCursor completed", zap.Bool("cursor_exists", cursor != nil))
 
 	//clean up the mess from running without a transaction
 	if cursor != nil {
-		s.logger.Info("RisingWave DEBUG [SINKER] - Found existing cursor, performing undo cleanup", zap.Uint64("block_num", cursor.Block().Num()))
 		err = s.db.HandleBlocksUndo(cursor.Block().Num())
 		if err != nil {
-			s.logger.Error("RisingWave DEBUG [SINKER] - HandleBlocksUndo failed", zap.Error(err))
 			return fmt.Errorf("handle blocks undo from %d : %w", cursor.Block().Num(), err)
 		}
-		s.logger.Info("RisingWave DEBUG [SINKER] - HandleBlocksUndo completed successfully")
 	}
 
 	s.logger.Info("fetched cursor", zap.Uint64("block_num", cursor.Block().Num()))
-	s.logger.Info("RisingWave DEBUG [SINKER] - About to start streaming with base sinker")
 
 	s.stats.LastBlockProcessAt = time.Now()
 	s.Sinker.Run(ctx, cursor, s)
@@ -80,11 +72,6 @@ type Holder struct {
 var holding []*Holder
 
 func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrpc.BlockScopedData, isLive *bool, cursor *sink.Cursor) (err error) {
-	s.logger.Info("RisingWave DEBUG [BLOCK] - HandleBlockScopedData called",
-		zap.Uint64("block_num", data.Clock.Number),
-		zap.String("block_id", data.Clock.Id),
-		zap.Bool("is_live", isLive != nil && *isLive))
-
 	if (isLive != nil && *isLive) && s.useConstraints {
 		return fmt.Errorf("live mode is not supported without constraints")
 	}
@@ -116,12 +103,9 @@ func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrp
 	holding = append(holding, holder)
 	if data.Clock.Number%s.blockBatchSize == 0 || s.blockBatchSize == 1 || (isLive != nil && *isLive) {
 		if s.useTransaction && !s.parallel {
-			s.logger.Info("RisingWave DEBUG [BEGIN TRANSACTION]", zap.Uint64("block_num", data.Clock.Number))
 			if err := s.db.BeginTransaction(); err != nil {
-				s.logger.Error("RisingWave DEBUG [BEGIN TRANSACTION FAILED]", zap.Error(err))
 				return fmt.Errorf("begin tx: %w", err)
 			}
-			s.logger.Info("RisingWave DEBUG [BEGIN TRANSACTION SUCCESS]", zap.Uint64("block_num", data.Clock.Number))
 		}
 		errs := appengine.MultiError{}
 		if s.parallel {
@@ -159,7 +143,6 @@ func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrp
 				err = s.processHolder(h, s.stats)
 				if err != nil {
 					if s.useTransaction {
-						s.logger.Error("RisingWave DEBUG [ROLLBACK TRANSACTION]", zap.Error(err), zap.Uint64("block_num", data.Clock.Number))
 						s.db.RollbackTransaction()
 					}
 					return fmt.Errorf("process holder: %w", err)
@@ -169,22 +152,17 @@ func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrp
 
 		var flushDuration time.Duration
 		var flushErr error
-		s.logger.Info("RisingWave DEBUG [START FLUSH]", zap.Uint64("block_num", data.Clock.Number))
 		for i := 0; i < 3; i++ {
-			s.logger.Info("RisingWave DEBUG [FLUSH ATTEMPT]", zap.Int("attempt", i+1), zap.Uint64("block_num", data.Clock.Number))
 			flushDuration, flushErr = s.db.Flush()
 			if flushErr == nil {
-				s.logger.Info("RisingWave DEBUG [FLUSH SUCCESS]", zap.Int("attempt", i+1), zap.Uint64("block_num", data.Clock.Number))
 				break
 			}
-			s.logger.Error("RisingWave DEBUG [FLUSH FAILED]", zap.Error(flushErr), zap.Int("attempt", i+1), zap.Uint64("block_num", data.Clock.Number))
 			s.logger.Warn("flushing failed, retrying", zap.Error(flushErr))
 			if i < 2 {
 				time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
 			}
 		}
 		if flushErr != nil {
-			s.logger.Error("RisingWave DEBUG [FLUSH FINAL FAILURE]", zap.Error(flushErr), zap.Uint64("block_num", data.Clock.Number))
 			return fmt.Errorf("flushing: %w", flushErr)
 		}
 
@@ -197,12 +175,9 @@ func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrp
 		}
 
 		if s.useTransaction && !s.parallel {
-			s.logger.Info("RisingWave DEBUG [COMMIT TRANSACTION]", zap.Uint64("block_num", data.Clock.Number))
 			if err := s.db.CommitTransaction(); err != nil {
-				s.logger.Error("RisingWave DEBUG [COMMIT TRANSACTION FAILED]", zap.Error(err), zap.Uint64("block_num", data.Clock.Number))
 				return fmt.Errorf("commit tx: %w", err)
 			}
-			s.logger.Info("RisingWave DEBUG [COMMIT TRANSACTION SUCCESS]", zap.Uint64("block_num", data.Clock.Number))
 		}
 		holding = []*Holder{}
 	}

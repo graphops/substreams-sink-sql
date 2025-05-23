@@ -46,37 +46,25 @@ func New(sink *sink.Sinker, loader *db2.Loader, logger *zap.Logger, tracer loggi
 }
 
 func (s *SQLSinker) Run(ctx context.Context) {
-	s.logger.Info("RisingWave DEBUG [SINKER] - Starting database changes sinker")
-
 	cursor, mistmatchDetected, err := s.loader.GetCursor(ctx, s.OutputModuleHash())
 	if err != nil && !errors.Is(err, db2.ErrCursorNotFound) {
-		s.logger.Error("RisingWave DEBUG [SINKER] - GetCursor failed", zap.Error(err))
 		s.Shutdown(fmt.Errorf("unable to retrieve cursor: %w", err))
 		return
 	}
-	s.logger.Info("RisingWave DEBUG [SINKER] - GetCursor completed",
-		zap.Bool("cursor_found", !errors.Is(err, db2.ErrCursorNotFound)),
-		zap.Bool("mismatch_detected", mistmatchDetected))
 
 	// We write an empty cursor right away in the database because the flush logic
 	// only performs an `update` operation so an initial cursor is required in the database
 	// for the flush to work correctly.
 	if errors.Is(err, db2.ErrCursorNotFound) {
-		s.logger.Info("RisingWave DEBUG [SINKER] - No cursor found, inserting blank cursor")
 		if err := s.loader.InsertCursor(ctx, s.OutputModuleHash(), sink.NewBlankCursor()); err != nil {
-			s.logger.Error("RisingWave DEBUG [SINKER] - InsertCursor failed", zap.Error(err))
 			s.Shutdown(fmt.Errorf("unable to write initial empty cursor: %w", err))
 			return
 		}
-		s.logger.Info("RisingWave DEBUG [SINKER] - Blank cursor inserted successfully")
 	} else if mistmatchDetected {
-		s.logger.Info("RisingWave DEBUG [SINKER] - Module mismatch detected, updating cursor")
 		if err := s.loader.InsertCursor(ctx, s.OutputModuleHash(), cursor); err != nil {
-			s.logger.Error("RisingWave DEBUG [SINKER] - InsertCursor for mismatch failed", zap.Error(err))
 			s.Shutdown(fmt.Errorf("unable to write new cursor after module mistmatch: %w", err))
 			return
 		}
-		s.logger.Info("RisingWave DEBUG [SINKER] - Cursor updated after module mismatch")
 	}
 
 	s.Sinker.OnTerminating(s.Shutdown)
@@ -101,18 +89,11 @@ func (s *SQLSinker) Run(ctx context.Context) {
 		zap.Stringer("restarting_at", cursor.Block()),
 		zap.String("loader", s.loader.GetIdentifier()),
 	)
-	s.logger.Info("RisingWave DEBUG [SINKER] - About to start base sinker with streaming")
 	s.Sinker.Run(ctx, cursor, s)
-	s.logger.Info("RisingWave DEBUG [SINKER] - Base sinker streaming completed")
 }
 
 func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrpc.BlockScopedData, isLive *bool, cursor *sink.Cursor) error {
 	output := data.Output
-
-	s.logger.Info("RisingWave DEBUG [SINKER] - HandleBlockScopedData called",
-		zap.Uint64("block_num", data.Clock.Number),
-		zap.String("block_id", data.Clock.Id),
-		zap.Bool("is_live", isLive != nil && *isLive))
 
 	if output.Name != s.OutputModuleName() {
 		return fmt.Errorf("received data from wrong output module, expected to received from %q but got module's output for %q", s.OutputModuleName(), output.Name)
@@ -133,13 +114,9 @@ func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstream
 			return fmt.Errorf("unmarshal database changes: %w", err)
 		}
 
-		s.logger.Info("RisingWave DEBUG [SINKER] - About to apply database changes",
-			zap.Int("table_changes_count", len(dbChanges.TableChanges)))
 		if err := s.applyDatabaseChanges(dbChanges, data.Clock.Number, data.FinalBlockHeight); err != nil {
-			s.logger.Error("RisingWave DEBUG [SINKER] - Apply database changes failed", zap.Error(err))
 			return fmt.Errorf("apply database changes: %w", err)
 		}
-		s.logger.Info("RisingWave DEBUG [SINKER] - Database changes applied successfully")
 	}
 	if s.lastAppliedBlockNum == nil {
 		s.lastAppliedBlockNum = &data.Clock.Number
@@ -147,13 +124,6 @@ func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstream
 
 	blockFlushNeeded := s.batchBlockModulo(isLive) > 0 && data.Clock.Number-*s.lastAppliedBlockNum >= s.batchBlockModulo(isLive)
 	rowFlushNeeded := s.loader.FlushNeeded()
-
-	s.logger.Info("RisingWave DEBUG [SINKER] - Flush decision",
-		zap.Bool("block_flush_needed", blockFlushNeeded),
-		zap.Bool("row_flush_needed", rowFlushNeeded),
-		zap.Uint64("current_block", data.Clock.Number),
-		zap.Uint64("last_applied_block", *s.lastAppliedBlockNum),
-		zap.Uint64("batch_block_modulo", s.batchBlockModulo(isLive)))
 
 	if blockFlushNeeded || rowFlushNeeded {
 		s.logger.Debug("flushing to database",
@@ -164,16 +134,11 @@ func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstream
 			zap.Bool("row_flush_interval_reached", rowFlushNeeded),
 		)
 
-		s.logger.Info("RisingWave DEBUG [SINKER] - Starting flush operation to database")
 		flushStart := time.Now()
 		rowFlushedCount, err := s.loader.Flush(ctx, s.OutputModuleHash(), cursor, data.FinalBlockHeight)
 		if err != nil {
-			s.logger.Error("RisingWave DEBUG [SINKER] - Flush operation failed", zap.Error(err))
 			return fmt.Errorf("failed to flush at block %s: %w", cursor.Block(), err)
 		}
-		s.logger.Info("RisingWave DEBUG [SINKER] - Flush operation completed successfully",
-			zap.Int("rows_flushed", rowFlushedCount),
-			zap.Duration("flush_duration", time.Since(flushStart)))
 
 		flushDuration := time.Since(flushStart)
 		if flushDuration > 5*time.Second {
@@ -196,7 +161,6 @@ func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstream
 		s.lastAppliedBlockNum = &data.Clock.Number
 	}
 
-	s.logger.Info("RisingWave DEBUG [SINKER] - HandleBlockScopedData completed successfully")
 	return nil
 }
 
@@ -264,7 +228,6 @@ func (s *SQLSinker) applyDatabaseChanges(dbChanges *pbdatabase.DatabaseChanges, 
 }
 
 func (s *SQLSinker) HandleBlockRangeCompletion(ctx context.Context, cursor *sink.Cursor) error {
-
 	s.logger.Info("stream completed, flushing to database", zap.Stringer("block", cursor.Block()))
 	_, err := s.loader.Flush(ctx, s.OutputModuleHash(), cursor, cursor.Block().Num())
 	if err != nil {

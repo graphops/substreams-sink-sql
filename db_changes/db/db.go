@@ -66,22 +66,13 @@ func NewLoader(
 		return nil, fmt.Errorf("open db connection: %w", err)
 	}
 
-	// RisingWave-specific connection optimizations to minimize transaction status bugs
-	logger.Info("RisingWave DEBUG [DB LOADER] - Checking driver for optimizations",
-		zap.String("dsn_driver", dsn.Driver()),
-		zap.String("sql_driver", dsn.SqlDriver()))
-
+	// RisingWave-specific connection optimizations
 	if dsn.Driver() == "risingwave" {
-		logger.Info("RisingWave DEBUG [DB LOADER] - Applying RisingWave connection optimizations")
 		// Use minimal connection pooling to reduce transaction state issues
 		sqlDB.SetMaxOpenConns(2)    // Limit concurrent connections
 		sqlDB.SetMaxIdleConns(1)    // Keep minimal idle connections
 		sqlDB.SetConnMaxLifetime(0) // No connection lifetime limit
 		sqlDB.SetConnMaxIdleTime(0) // No idle timeout
-		logger.Info("RisingWave DEBUG [DB LOADER] - RisingWave connection optimizations applied")
-	} else {
-		logger.Info("RisingWave DEBUG [DB LOADER] - Not applying RisingWave optimizations",
-			zap.String("driver", dsn.Driver()))
 	}
 
 	dialect, err := newDialect(dsn, sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
@@ -172,12 +163,8 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 		return l.testTx, nil
 	}
 
-	// Add debugging for RisingWave connection issues
-	l.logger.Info("RisingWave DEBUG [DB LOADER] - About to call DB.BeginTx()")
-
 	// RisingWave-specific workaround: Use autocommit mode instead of transactions
 	if l.dsn.Driver() == "risingwave" {
-		l.logger.Info("RisingWave DEBUG [DB LOADER] - Using RisingWave autocommit workaround (no transactions)")
 		// Return a fake transaction that just wraps the connection
 		return &RisingWaveAutocommitTx{
 			conn:   l.DB,
@@ -185,42 +172,10 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 		}, nil
 	}
 
-	// Check connection state before beginning transaction
-	if pingErr := l.DB.Ping(); pingErr != nil {
-		l.logger.Error("RisingWave DEBUG [DB LOADER] - Connection ping failed before BeginTx", zap.Error(pingErr))
-	} else {
-		l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection ping successful before BeginTx")
-	}
-
-	// Check connection stats
-	stats := l.DB.Stats()
-	l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection pool stats",
-		zap.Int("open_connections", stats.OpenConnections),
-		zap.Int("in_use", stats.InUse),
-		zap.Int("idle", stats.Idle),
-		zap.Int64("wait_count", stats.WaitCount),
-		zap.Duration("wait_duration", stats.WaitDuration),
-		zap.Int64("max_idle_closed", stats.MaxIdleClosed),
-		zap.Int64("max_idle_time_closed", stats.MaxIdleTimeClosed),
-		zap.Int64("max_lifetime_closed", stats.MaxLifetimeClosed))
-
-	// Add a small delay to see if timing is the issue
-	l.logger.Info("RisingWave DEBUG [DB LOADER] - About to call BeginTx after ping")
-
 	tx, err := l.DB.BeginTx(ctx, opts)
 	if err != nil {
-		l.logger.Error("RisingWave DEBUG [DB LOADER] - DB.BeginTx() failed", zap.Error(err))
-
-		// Try ping again after failure to see connection state
-		if pingErr := l.DB.Ping(); pingErr != nil {
-			l.logger.Error("RisingWave DEBUG [DB LOADER] - Connection ping failed after BeginTx failure", zap.Error(pingErr))
-		} else {
-			l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection ping still successful after BeginTx failure")
-		}
-
 		return nil, err
 	}
-	l.logger.Info("RisingWave DEBUG [DB LOADER] - DB.BeginTx() success")
 
 	return tx, nil
 }
@@ -232,22 +187,18 @@ type RisingWaveAutocommitTx struct {
 }
 
 func (tx *RisingWaveAutocommitTx) Rollback() error {
-	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Rollback called (no-op in autocommit mode)")
 	return nil
 }
 
 func (tx *RisingWaveAutocommitTx) Commit() error {
-	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Commit called (no-op in autocommit mode)")
 	return nil
 }
 
 func (tx *RisingWaveAutocommitTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Executing query", zap.String("query", query))
 	return tx.conn.ExecContext(ctx, query, args...)
 }
 
 func (tx *RisingWaveAutocommitTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Querying", zap.String("query", query))
 	return tx.conn.QueryContext(ctx, query, args...)
 }
 
