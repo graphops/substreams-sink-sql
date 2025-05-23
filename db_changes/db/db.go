@@ -153,7 +153,25 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 	if l.testTx != nil {
 		return l.testTx, nil
 	}
-	return l.DB.BeginTx(ctx, opts)
+
+	// Add debugging for RisingWave connection issues
+	l.logger.Info("RisingWave DEBUG [DB LOADER] - About to call DB.BeginTx()")
+
+	// Check connection state before beginning transaction
+	if pingErr := l.DB.Ping(); pingErr != nil {
+		l.logger.Error("RisingWave DEBUG [DB LOADER] - Connection ping failed before BeginTx", zap.Error(pingErr))
+	} else {
+		l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection ping successful before BeginTx")
+	}
+
+	tx, err := l.DB.BeginTx(ctx, opts)
+	if err != nil {
+		l.logger.Error("RisingWave DEBUG [DB LOADER] - DB.BeginTx() failed", zap.Error(err))
+		return nil, err
+	}
+	l.logger.Info("RisingWave DEBUG [DB LOADER] - DB.BeginTx() success")
+
+	return tx, nil
 }
 
 func (l *Loader) BatchBlockFlushInterval() int {
