@@ -15,6 +15,7 @@ import (
 	protosql "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	clickhouse "github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	schema2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	stats2 "github.com/streamingfast/substreams-sink-sql/db_proto/stats"
 	pbsql "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/services/v1"
@@ -204,6 +205,12 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("creating postgres database: %w", err)
 		}
 
+	case "risingwave":
+		database, err = risingwave.NewDatabase(schema, dsn, outputModuleName, rootMessageDescriptor, useProtoOption, useConstraints, zlog)
+		if err != nil {
+			return fmt.Errorf("creating risingwave database: %w", err)
+		}
+
 	case "clickhouse":
 		database, err = clickhouse.NewDatabase(
 			cmd.Context(),
@@ -247,6 +254,9 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		}
 
 		err = database.CommitTransaction()
+		if err != nil {
+			return fmt.Errorf("commit transaction: %w", err)
+		}
 
 	} else {
 		migrationNeeded := sinkInfo.SchemaHash != database.GetDialect().SchemaHash()
