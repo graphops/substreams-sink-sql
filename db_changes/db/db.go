@@ -66,6 +66,24 @@ func NewLoader(
 		return nil, fmt.Errorf("open db connection: %w", err)
 	}
 
+	// RisingWave-specific connection optimizations to minimize transaction status bugs
+	logger.Info("RisingWave DEBUG [DB LOADER] - Checking driver for optimizations",
+		zap.String("dsn_driver", dsn.Driver()),
+		zap.String("sql_driver", dsn.SqlDriver()))
+
+	if dsn.Driver() == "risingwave" {
+		logger.Info("RisingWave DEBUG [DB LOADER] - Applying RisingWave connection optimizations")
+		// Use minimal connection pooling to reduce transaction state issues
+		sqlDB.SetMaxOpenConns(2)    // Limit concurrent connections
+		sqlDB.SetMaxIdleConns(1)    // Keep minimal idle connections
+		sqlDB.SetConnMaxLifetime(0) // No connection lifetime limit
+		sqlDB.SetConnMaxIdleTime(0) // No idle timeout
+		logger.Info("RisingWave DEBUG [DB LOADER] - RisingWave connection optimizations applied")
+	} else {
+		logger.Info("RisingWave DEBUG [DB LOADER] - Not applying RisingWave optimizations",
+			zap.String("driver", dsn.Driver()))
+	}
+
 	dialect, err := newDialect(dsn, sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
 	if err != nil {
 		return nil, fmt.Errorf("get dialect: %w", err)
@@ -157,6 +175,16 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 	// Add debugging for RisingWave connection issues
 	l.logger.Info("RisingWave DEBUG [DB LOADER] - About to call DB.BeginTx()")
 
+	// RisingWave-specific workaround: Use autocommit mode instead of transactions
+	if l.dsn.Driver() == "risingwave" {
+		l.logger.Info("RisingWave DEBUG [DB LOADER] - Using RisingWave autocommit workaround (no transactions)")
+		// Return a fake transaction that just wraps the connection
+		return &RisingWaveAutocommitTx{
+			conn:   l.DB,
+			logger: l.logger,
+		}, nil
+	}
+
 	// Check connection state before beginning transaction
 	if pingErr := l.DB.Ping(); pingErr != nil {
 		l.logger.Error("RisingWave DEBUG [DB LOADER] - Connection ping failed before BeginTx", zap.Error(pingErr))
@@ -195,6 +223,32 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 	l.logger.Info("RisingWave DEBUG [DB LOADER] - DB.BeginTx() success")
 
 	return tx, nil
+}
+
+// RisingWaveAutocommitTx is a fake transaction that uses autocommit mode for RisingWave
+type RisingWaveAutocommitTx struct {
+	conn   *sql.DB
+	logger *zap.Logger
+}
+
+func (tx *RisingWaveAutocommitTx) Rollback() error {
+	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Rollback called (no-op in autocommit mode)")
+	return nil
+}
+
+func (tx *RisingWaveAutocommitTx) Commit() error {
+	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Commit called (no-op in autocommit mode)")
+	return nil
+}
+
+func (tx *RisingWaveAutocommitTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Executing query", zap.String("query", query))
+	return tx.conn.ExecContext(ctx, query, args...)
+}
+
+func (tx *RisingWaveAutocommitTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	tx.logger.Info("RisingWave DEBUG [AUTOCOMMIT TX] - Querying", zap.String("query", query))
+	return tx.conn.QueryContext(ctx, query, args...)
 }
 
 func (l *Loader) BatchBlockFlushInterval() int {

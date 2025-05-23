@@ -47,6 +47,13 @@ func (l *Loader) Flush(ctx context.Context, outputModuleHash string, cursor *sin
 	}
 	l.logger.Info("RisingWave DEBUG [FLUSH] - BeginTx successful")
 
+	// Check if we're using RisingWave autocommit mode
+	if _, isAutocommit := tx.(*RisingWaveAutocommitTx); isAutocommit {
+		l.logger.Info("RisingWave DEBUG [FLUSH] - Using autocommit mode (no real transaction)")
+	} else {
+		l.logger.Info("RisingWave DEBUG [FLUSH] - Using real transaction mode")
+	}
+
 	defer func() {
 		if err != nil {
 			l.logger.Error("RisingWave DEBUG [FLUSH] - Operation failed, rolling back", zap.Error(err))
