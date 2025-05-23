@@ -164,9 +164,32 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 		l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection ping successful before BeginTx")
 	}
 
+	// Check connection stats
+	stats := l.DB.Stats()
+	l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection pool stats",
+		zap.Int("open_connections", stats.OpenConnections),
+		zap.Int("in_use", stats.InUse),
+		zap.Int("idle", stats.Idle),
+		zap.Int64("wait_count", stats.WaitCount),
+		zap.Duration("wait_duration", stats.WaitDuration),
+		zap.Int64("max_idle_closed", stats.MaxIdleClosed),
+		zap.Int64("max_idle_time_closed", stats.MaxIdleTimeClosed),
+		zap.Int64("max_lifetime_closed", stats.MaxLifetimeClosed))
+
+	// Add a small delay to see if timing is the issue
+	l.logger.Info("RisingWave DEBUG [DB LOADER] - About to call BeginTx after ping")
+
 	tx, err := l.DB.BeginTx(ctx, opts)
 	if err != nil {
 		l.logger.Error("RisingWave DEBUG [DB LOADER] - DB.BeginTx() failed", zap.Error(err))
+
+		// Try ping again after failure to see connection state
+		if pingErr := l.DB.Ping(); pingErr != nil {
+			l.logger.Error("RisingWave DEBUG [DB LOADER] - Connection ping failed after BeginTx failure", zap.Error(pingErr))
+		} else {
+			l.logger.Info("RisingWave DEBUG [DB LOADER] - Connection ping still successful after BeginTx failure")
+		}
+
 		return nil, err
 	}
 	l.logger.Info("RisingWave DEBUG [DB LOADER] - DB.BeginTx() success")

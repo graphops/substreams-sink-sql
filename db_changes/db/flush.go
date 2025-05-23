@@ -18,6 +18,28 @@ func (l *Loader) Flush(ctx context.Context, outputModuleHash string, cursor *sin
 		zap.Stringer("block", cursor.Block()),
 		zap.Uint64("last_final_block", lastFinalBlock))
 
+	// Debug: Log what operations are queued before transaction begins
+	l.logger.Info("RisingWave DEBUG [FLUSH] - Operations queued for flush",
+		zap.Int("table_count", l.entries.Len()))
+
+	for tablePair := l.entries.Oldest(); tablePair != nil; tablePair = tablePair.Next() {
+		tableName := tablePair.Key
+		operations := tablePair.Value
+		l.logger.Info("RisingWave DEBUG [FLUSH] - Table operations",
+			zap.String("table", tableName),
+			zap.Int("operation_count", operations.Len()))
+
+		// Log details of each operation
+		for opPair := operations.Oldest(); opPair != nil; opPair = opPair.Next() {
+			operation := opPair.Value
+			l.logger.Info("RisingWave DEBUG [FLUSH] - Operation details",
+				zap.String("table", tableName),
+				zap.String("operation_type", string(operation.opType)),
+				zap.String("primary_key", fmt.Sprintf("%v", operation.primaryKey)),
+				zap.String("data", fmt.Sprintf("%v", operation.data)))
+		}
+	}
+
 	tx, err := l.BeginTx(ctx, nil)
 	if err != nil {
 		l.logger.Error("RisingWave DEBUG [FLUSH] - BeginTx failed", zap.Error(err))
