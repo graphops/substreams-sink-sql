@@ -186,10 +186,25 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 	connectionString := dsn.ConnString()
 
 	zlog.Info("connecting to db", zap.String("dsn", connectionString))
+	// Add early debugging for RisingWave
+	zlog.Info("RisingWave DEBUG [STARTUP] - DSN details",
+		zap.String("driver", dsn.Driver()),
+		zap.String("sql_driver", dsn.SqlDriver()),
+		zap.String("connection_string", connectionString))
+
 	sqlDB, err := sql.Open(dsn.SqlDriver(), connectionString)
 	if err != nil {
+		zlog.Error("RisingWave DEBUG [STARTUP] - sql.Open failed", zap.Error(err))
 		return fmt.Errorf("open db connection: %w", err)
 	}
+	zlog.Info("RisingWave DEBUG [STARTUP] - sql.Open successful")
+
+	// Test database connectivity immediately
+	if err := sqlDB.Ping(); err != nil {
+		zlog.Error("RisingWave DEBUG [STARTUP] - Database ping failed", zap.Error(err))
+		return fmt.Errorf("database connection test failed: %w", err)
+	}
+	zlog.Info("RisingWave DEBUG [STARTUP] - Database ping successful")
 
 	var dialect protosql.Dialect
 	var database protosql.Database
@@ -212,10 +227,13 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("creating risingwave dialect: %w", err)
 		}
 		dialect = d
+		zlog.Info("RisingWave DEBUG [STARTUP] - RisingWave dialect created successfully")
+
 		database, err = risingwave.NewDatabase(schemaName, d, sqlDB, outputModuleName, rootMessageDescriptor, useProtoOption, zlog)
 		if err != nil {
 			return fmt.Errorf("creating risingwave database: %w", err)
 		}
+		zlog.Info("RisingWave DEBUG [STARTUP] - RisingWave database object created successfully")
 
 	case "clickhouse":
 		d, err := clickhouse.NewDialectClickHouse(schema.Name, schema.TableRegistry, zlog)
@@ -244,27 +262,38 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 
 	sinkInfo, err := database.FetchSinkInfo(schema.Name)
 	if err != nil {
+		zlog.Error("RisingWave DEBUG [STARTUP] - FetchSinkInfo failed", zap.Error(err))
 		return fmt.Errorf("fetching sink info: %w", err)
 	}
+	zlog.Info("RisingWave DEBUG [STARTUP] - FetchSinkInfo completed", zap.Bool("sink_info_exists", sinkInfo != nil))
 
 	if sinkInfo == nil {
+		zlog.Info("RisingWave DEBUG [STARTUP] - Setting up new database schema")
 		err := database.BeginTransaction()
 		if err != nil {
+			zlog.Error("RisingWave DEBUG [STARTUP] - BeginTransaction for setup failed", zap.Error(err))
 			return fmt.Errorf("begin transaction: %w", err)
 		}
+		zlog.Info("RisingWave DEBUG [STARTUP] - Setup transaction began successfully")
+
 		err = database.CreateDatabase(useConstraints, schemaName)
 		if err != nil {
 			database.RollbackTransaction()
+			zlog.Error("RisingWave DEBUG [STARTUP] - CreateDatabase failed", zap.Error(err))
 			return fmt.Errorf("creating database: %w", err)
 		}
+		zlog.Info("RisingWave DEBUG [STARTUP] - CreateDatabase completed successfully")
 
 		err = database.StoreSinkInfo(schemaName, dialect.SchemaHash())
 		if err != nil {
 			database.RollbackTransaction()
+			zlog.Error("RisingWave DEBUG [STARTUP] - StoreSinkInfo failed", zap.Error(err))
 			return fmt.Errorf("storing sink info: %w", err)
 		}
+		zlog.Info("RisingWave DEBUG [STARTUP] - StoreSinkInfo completed successfully")
 
 		err = database.CommitTransaction()
+		zlog.Info("RisingWave DEBUG [STARTUP] - Setup transaction committed successfully")
 
 	} else {
 		migrationNeeded := sinkInfo.SchemaHash != dialect.SchemaHash()
@@ -331,16 +360,19 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		}
 	case "risingwave":
 		if useConstraints {
+			zlog.Info("RisingWave DEBUG [STARTUP] - Creating row inserter")
 			inserter, err = risingwave.NewRowInserter(database.(*risingwave.Database), zlog)
 			if err != nil {
 				return fmt.Errorf("creating row inserter: %w", err)
 			}
 		} else {
+			zlog.Info("RisingWave DEBUG [STARTUP] - Creating accumulator inserter")
 			inserter, err = risingwave.NewAccumulatorInserter(database.(*risingwave.Database), zlog)
 			if err != nil {
 				return fmt.Errorf("creating accumulator inserter: %w", err)
 			}
 		}
+		zlog.Info("RisingWave DEBUG [STARTUP] - Inserter created successfully")
 	case "clickhouse":
 		inserter, err = clickhouse.NewAccumulatorInserter(database.(*clickhouse.Database), zlog)
 	default:
@@ -355,10 +387,13 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		zlog.Error("sinker terminating", zap.Error(err))
 	})
 
+	zlog.Info("RisingWave DEBUG [STARTUP] - Sinker created, about to start running")
 	err = sinker.Run(cmd.Context())
 	if err != nil {
+		zlog.Error("RisingWave DEBUG [STARTUP] - Sinker.Run failed", zap.Error(err))
 		return fmt.Errorf("runnning sinker:%w", err)
 	}
+	zlog.Info("RisingWave DEBUG [STARTUP] - Sinker completed successfully")
 
 	stats.Log()
 	fmt.Println("Goodbye")
