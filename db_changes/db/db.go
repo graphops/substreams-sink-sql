@@ -66,15 +66,6 @@ func NewLoader(
 		return nil, fmt.Errorf("open db connection: %w", err)
 	}
 
-	// RisingWave-specific connection optimizations
-	if dsn.Driver() == "risingwave" {
-		// Use minimal connection pooling to reduce transaction state issues
-		sqlDB.SetMaxOpenConns(2)    // Limit concurrent connections
-		sqlDB.SetMaxIdleConns(1)    // Keep minimal idle connections
-		sqlDB.SetConnMaxLifetime(0) // No connection lifetime limit
-		sqlDB.SetConnMaxIdleTime(0) // No idle timeout
-	}
-
 	dialect, err := newDialect(dsn, sqlDB.Driver(), dsn.Schema(), cursorTableName, historyTableName, clickhouseCluster)
 	if err != nil {
 		return nil, fmt.Errorf("get dialect: %w", err)
