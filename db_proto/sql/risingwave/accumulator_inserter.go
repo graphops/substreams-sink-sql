@@ -21,35 +21,41 @@ type AccumulatorInserter struct {
 	logger       *zap.Logger
 }
 
-func NewAccumulatorInserter(database *Database, logger *zap.Logger) (*AccumulatorInserter, error) {
-	logger = logger.Named("postgres inserter")
-	tables := database.Dialect.GetTables()
+func NewAccumulatorInserter(logger *zap.Logger) (*AccumulatorInserter, error) {
+	logger = logger.Named("risingwave inserter")
+
+	return &AccumulatorInserter{
+		logger: logger,
+	}, nil
+}
+
+func (i *AccumulatorInserter) init(database *Database) error {
+	tables := database.dialect.GetTables()
 	accumulators := map[string]*accumulator{}
 
 	for _, table := range tables {
-		query, err := createInsertFromDescriptorAcc(table, database.Dialect)
+		query, err := createInsertFromDescriptorAcc(table, database.dialect)
 		if err != nil {
-			return nil, fmt.Errorf("creating insert from descriptor for table %q: %w", table.Name, err)
+			return fmt.Errorf("creating insert from descriptor for table %q: %w", table.Name, err)
 		}
 		accumulators[table.Name] = &accumulator{
 			query: query,
 		}
 	}
 	accumulators["_blocks_"] = &accumulator{
-		query: fmt.Sprintf("INSERT INTO %s (number, hash, timestamp) VALUES ", tableName(database.schemaName, "_blocks_")),
+		query: fmt.Sprintf("INSERT INTO %s (number, hash, timestamp) VALUES ", tableName(database.schema.Name, "_blocks_")),
 	}
 
-	cursorQuery := fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET cursor = $2", tableName(database.schemaName, "_cursor_"))
-	cs, err := database.DB.Prepare(cursorQuery)
+	cursorQuery := fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET cursor = $2", tableName(database.schema.Name, "_cursor_"))
+	cs, err := database.db.Prepare(cursorQuery)
 	if err != nil {
-		return nil, fmt.Errorf("preparing statement %q: %w", cursorQuery, err)
+		return fmt.Errorf("preparing statement %q: %w", cursorQuery, err)
 	}
 
-	return &AccumulatorInserter{
-		cursorStmt:   cs,
-		accumulators: accumulators,
-		logger:       logger,
-	}, nil
+	i.accumulators = accumulators
+	i.cursorStmt = cs
+
+	return nil
 }
 
 func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (string, error) {
@@ -129,6 +135,56 @@ func (i *AccumulatorInserter) Flush(tx *sql.Tx) error {
 				shortInsert = insert[:256] + "..."
 			}
 			return fmt.Errorf("executing insert %s: %w", shortInsert, err)
+		}
+		acc.rowValues = acc.rowValues[:0]
+	}
+
+	return nil
+}
+
+func (i *AccumulatorInserter) insert(table string, values []any, database *Database) error {
+	var v []string
+	if table == "_cursor_" {
+		stmt := database.wrapInsertStatement(i.cursorStmt)
+		_, err := stmt.Exec(values...)
+		if err != nil {
+			return fmt.Errorf("executing insert: %w", err)
+		}
+		return nil
+	}
+	for _, value := range values {
+		v = append(v, ValueToString(value))
+	}
+	accumulator := i.accumulators[table]
+	if accumulator == nil {
+		return fmt.Errorf("accumulator not found for table %q", table)
+	}
+	accumulator.rowValues = append(accumulator.rowValues, v)
+
+	return nil
+}
+
+func (i *AccumulatorInserter) flush(database *Database) error {
+	for _, acc := range i.accumulators {
+		if len(acc.rowValues) == 0 {
+			continue
+		}
+		var b strings.Builder
+		b.WriteString(acc.query)
+		for _, values := range acc.rowValues {
+			b.WriteString("(")
+			b.WriteString(strings.Join(values, ","))
+			b.WriteString("),")
+		}
+		insert := strings.Trim(b.String(), ",")
+
+		_, err := database.tx.Exec(insert)
+		if err != nil {
+			shortInsert := insert
+			if len(insert) > 256 {
+				shortInsert = insert[:256] + "..."
+			}
+			return fmt.Errorf("risingwave accumulator inserter: executing insert %s: %w", shortInsert, err)
 		}
 		acc.rowValues = acc.rowValues[:0]
 	}
