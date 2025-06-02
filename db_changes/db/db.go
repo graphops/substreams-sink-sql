@@ -154,9 +154,13 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 		return l.testTx, nil
 	}
 
-	// RisingWave-specific workaround: Use autocommit mode instead of transactions
+	// RisingWave-specific behavior: RisingWave does not support read-write transactions
+	// According to RisingWave docs: "The BEGIN command starts the read-write transaction mode, 
+	// which is not supported yet in RisingWave. For compatibility reasons, this command will 
+	// still succeed but no transaction is actually started."
+	// Therefore, we use autocommit mode for all operations.
 	if l.dsn.Driver() == "risingwave" {
-		// Return a fake transaction that just wraps the connection
+		l.logger.Debug("RisingWave: using autocommit mode instead of transactions")
 		return &RisingWaveAutocommitTx{
 			conn:   l.DB,
 			logger: l.logger,
@@ -171,17 +175,25 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 	return tx, nil
 }
 
-// RisingWaveAutocommitTx is a fake transaction that uses autocommit mode for RisingWave
+// RisingWaveAutocommitTx implements the Tx interface for RisingWave's autocommit mode.
+// RisingWave does not support read-write transactions, so all operations are executed
+// directly against the database connection in autocommit mode.
 type RisingWaveAutocommitTx struct {
 	conn   *sql.DB
 	logger *zap.Logger
 }
 
 func (tx *RisingWaveAutocommitTx) Rollback() error {
+	// RisingWave operates in autocommit mode. Rollback is not supported/needed
+	// since each statement is automatically committed.
+	tx.logger.Debug("RisingWave: rollback is no-op in autocommit mode")
 	return nil
 }
 
 func (tx *RisingWaveAutocommitTx) Commit() error {
+	// RisingWave operates in autocommit mode. Commit is not needed
+	// since each statement is automatically committed.
+	tx.logger.Debug("RisingWave: commit is no-op in autocommit mode")
 	return nil
 }
 
