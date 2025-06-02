@@ -24,7 +24,7 @@ const risingwaveStaticSql = `
 	CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
 		name VARCHAR PRIMARY KEY,
 		cursor VARCHAR NOT NULL
-	);
+	) ON CONFLICT OVERWRITE;
 
 	CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
 		number INTEGER,
