@@ -150,12 +150,4 @@ func (i *RowInserter) flush(database *Database) error {
 	return nil
 }
 
-// Keep the original methods for compatibility
-func (i *RowInserter) Insert(table string, values []any, txWrapper func(stmt *sql.Stmt) *sql.Stmt) error {
-	// This method is kept for interface compatibility but should not be used
-	panic("use insert method instead")
-}
 
-func (i *RowInserter) Flush(tx *sql.Tx) error {
-	return nil
-}
