@@ -95,55 +95,7 @@ func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (s
 
 }
 
-func (i *AccumulatorInserter) Insert(table string, values []any, txWrapper func(stmt *sql.Stmt) *sql.Stmt) error {
-	var v []string
-	if table == "_cursor_" {
-		stmt := txWrapper(i.cursorStmt)
-		_, err := stmt.Exec(values...)
-		if err != nil {
-			return fmt.Errorf("executing insert: %w", err)
-		}
-		return nil
-	}
-	for _, value := range values {
-		v = append(v, ValueToString(value))
-	}
-	accumulator := i.accumulators[table]
-	if accumulator == nil {
-		return fmt.Errorf("accumulator not found for table %q", table)
-	}
-	accumulator.rowValues = append(accumulator.rowValues, v)
 
-	return nil
-}
-
-func (i *AccumulatorInserter) Flush(tx *sql.Tx) error {
-	for _, acc := range i.accumulators {
-		if len(acc.rowValues) == 0 {
-			continue
-		}
-		var b strings.Builder
-		b.WriteString(acc.query)
-		for _, values := range acc.rowValues {
-			b.WriteString("(")
-			b.WriteString(strings.Join(values, ","))
-			b.WriteString("),")
-		}
-		insert := strings.Trim(b.String(), ",")
-
-		_, err := tx.Exec(insert)
-		if err != nil {
-			shortInsert := insert
-			if len(insert) > 256 {
-				shortInsert = insert[:256] + "..."
-			}
-			return fmt.Errorf("executing insert %s: %w", shortInsert, err)
-		}
-		acc.rowValues = acc.rowValues[:0]
-	}
-
-	return nil
-}
 
 func (i *AccumulatorInserter) insert(table string, values []any, database *Database) error {
 	var v []string
