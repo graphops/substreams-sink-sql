@@ -16,10 +16,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// Database represents a RisingWave database connection.
+// Important: RisingWave does not support read-write transactions and operates in autocommit mode.
+// This means:
+// - All data modifications are immediately committed
+// - No rollback capability for individual operations
+// - ACID transaction semantics are not available
+// - Suitable for streaming/append-only workloads
 type Database struct {
 	*sql.BaseDatabase
 	db             *pqsql.DB
-	tx             *pqsql.Tx
+	tx             *pqsql.Tx // Always nil for RisingWave due to autocommit mode
 	schema         *schema.Schema
 	logger         *zap.Logger
 	dialect        *DialectRisingwave
@@ -33,6 +40,7 @@ func NewDatabase(schema *schema.Schema, dsn *db.DSN, moduleOutputType string, ro
 
 	connectionString := dsn.ConnString()
 	logger.Info("connecting to db", zap.String("dsn", connectionString))
+	logger.Info("RisingWave operates in autocommit mode - no transaction semantics available")
 	sqlDB, err := pqsql.Open(dsn.SqlDriver(), connectionString)
 	if err != nil {
 		return nil, fmt.Errorf("open db connection: %w", err)
@@ -110,14 +118,14 @@ func (d *Database) CreateDatabase(useConstraints bool) error {
 
 func (d *Database) createDatabase() error {
 	staticSql := fmt.Sprintf(risingwaveStaticSql, d.schema.Name, d.schema.Name, d.schema.Name, d.schema.Name)
-	_, err := d.tx.Exec(staticSql)
+	_, err := d.execSql(staticSql)
 	if err != nil {
 		return fmt.Errorf("executing static staticSql: %w\n%s", err, staticSql)
 	}
 
 	for _, statement := range d.dialect.CreateTableSql {
 		d.logger.Info("executing create statement", zap.String("sql", statement))
-		_, err := d.tx.Exec(statement)
+		_, err := d.execSql(statement)
 		if err != nil {
 			return fmt.Errorf("executing create statement: %w %s", err, statement)
 		}
@@ -129,21 +137,21 @@ func (d *Database) applyConstraints() error {
 	startAt := time.Now()
 	for _, constraint := range d.dialect.PrimaryKeySql {
 		d.logger.Info("executing pk statement", zap.String("sql", constraint.Sql))
-		_, err := d.tx.Exec(constraint.Sql)
+		_, err := d.execSql(constraint.Sql)
 		if err != nil {
 			return fmt.Errorf("executing pk statement: %w %s", err, constraint.Sql)
 		}
 	}
 	for _, constraint := range d.dialect.UniqueConstraintSql {
 		d.logger.Info("executing unique statement", zap.String("sql", constraint.Sql))
-		_, err := d.tx.Exec(constraint.Sql)
+		_, err := d.execSql(constraint.Sql)
 		if err != nil {
 			return fmt.Errorf("executing unique statement: %w %s", err, constraint.Sql)
 		}
 	}
 	for _, constraint := range d.dialect.ForeignKeySql {
 		d.logger.Info("executing fk constraint statement", zap.String("sql", constraint.Sql))
-		_, err := d.tx.Exec(constraint.Sql)
+		_, err := d.execSql(constraint.Sql)
 		if err != nil {
 			return fmt.Errorf("executing fk constraint statement: %w %s", err, constraint.Sql)
 		}
@@ -153,34 +161,72 @@ func (d *Database) applyConstraints() error {
 }
 
 func (d *Database) BeginTransaction() (err error) {
-	d.tx, err = d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
-	}
-	return nil
-}
-
-func (d *Database) CommitTransaction() (err error) {
-	err = d.tx.Commit()
-	if err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
-	}
+	// RisingWave does not support read-write transactions. According to RisingWave docs:
+	// "The BEGIN command starts the read-write transaction mode, which is not supported yet in RisingWave.
+	// For compatibility reasons, this command will still succeed but no transaction is actually started."
+	// 
+	// Since no actual transaction is started, we operate in autocommit mode and set tx to nil
+	// to ensure all subsequent operations use the database connection directly.
+	d.logger.Debug("RisingWave: skipping transaction begin, using autocommit mode")
 	d.tx = nil
 	return nil
 }
 
+func (d *Database) CommitTransaction() (err error) {
+	// RisingWave operates in autocommit mode since read-write transactions are not supported.
+	// All changes are automatically committed when executed.
+	d.logger.Debug("RisingWave: commit is no-op in autocommit mode")
+	
+	// Defensive check: if somehow a transaction was started (shouldn't happen), commit it
+	if d.tx != nil {
+		d.logger.Warn("RisingWave: unexpected transaction found during commit, attempting to commit")
+		err = d.tx.Commit()
+		if err != nil {
+			return fmt.Errorf("committing unexpected transaction: %w", err)
+		}
+		d.tx = nil
+	}
+	return nil
+}
+
 func (d *Database) RollbackTransaction() {
-	err := d.tx.Rollback()
-	if err != nil {
-		panic("RollbackTransaction failed: " + err.Error())
+	// RisingWave operates in autocommit mode and does not support traditional rollback.
+	// In streaming databases, data modifications are typically append-only.
+	// ROLLBACK documentation was not found for RisingWave, suggesting it may not be supported.
+	d.logger.Debug("RisingWave: rollback is no-op in autocommit mode")
+	
+	// Defensive check: if somehow a transaction was started (shouldn't happen), attempt rollback
+	if d.tx != nil {
+		d.logger.Warn("RisingWave: unexpected transaction found during rollback, attempting to rollback")
+		err := d.tx.Rollback()
+		if err != nil {
+			// Log error but don't panic since RisingWave may not support rollback
+			d.logger.Error("RisingWave: rollback failed on unexpected transaction", zap.Error(err))
+		}
+		d.tx = nil
 	}
 }
 
 func (d *Database) wrapInsertStatement(stmt *pqsql.Stmt) *pqsql.Stmt {
+	// RisingWave operates in autocommit mode, always use the original statement
+	// since d.tx should always be nil for RisingWave
 	if d.tx != nil {
+		// This should not happen for RisingWave, but handle defensively
+		d.logger.Warn("RisingWave: unexpected transaction found when wrapping statement")
 		stmt = d.tx.Stmt(stmt)
 	}
 	return stmt
+}
+
+// execSql executes SQL using the database connection in autocommit mode
+// RisingWave operates in autocommit mode, so we always use the direct database connection
+func (d *Database) execSql(query string, args ...any) (pqsql.Result, error) {
+	if d.tx != nil {
+		// This should not happen for RisingWave since we never create transactions
+		d.logger.Warn("RisingWave: unexpected transaction found during SQL execution, using transaction")
+		return d.tx.Exec(query, args...)
+	}
+	return d.db.Exec(query, args...)
 }
 
 func (d *Database) Insert(table string, values []any) error {
@@ -233,7 +279,7 @@ func (d *Database) FetchSinkInfo(schemaName string) (*sql.SinkInfo, error) {
 }
 
 func (d *Database) StoreSinkInfo(schemaName string, schemaHash string) error {
-	_, err := d.tx.Exec(fmt.Sprintf("INSERT INTO %s._sink_info_ (schema_hash) VALUES ($1)", schemaName), schemaHash)
+	_, err := d.execSql(fmt.Sprintf("INSERT INTO %s._sink_info_ (schema_hash) VALUES ($1)", schemaName), schemaHash)
 	if err != nil {
 		return fmt.Errorf("storing schema hash: %w", err)
 	}
@@ -241,7 +287,7 @@ func (d *Database) StoreSinkInfo(schemaName string, schemaHash string) error {
 }
 
 func (d *Database) UpdateSinkInfoHash(schemaName string, newHash string) error {
-	_, err := d.tx.Exec(fmt.Sprintf("UPDATE %s._sink_info_ SET schema_hash = $1", schemaName), newHash)
+	_, err := d.execSql(fmt.Sprintf("UPDATE %s._sink_info_ SET schema_hash = $1", schemaName), newHash)
 	if err != nil {
 		return fmt.Errorf("updating schema hash: %w", err)
 	}

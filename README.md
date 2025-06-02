@@ -192,6 +192,19 @@ RisingWave uses optimized data types for blockchain data:
 - `BYTEA` with hex encoding for blockchain addresses and hashes
 - `VARCHAR` instead of `TEXT` for better performance on indexed string fields
 
+#### Transaction Limitations
+⚠️ **Important**: RisingWave does not support traditional ACID transactions:
+- **No read-write transactions**: All operations use autocommit mode
+- **No rollback capability**: Each statement is immediately committed
+- **Streaming-first design**: Optimized for append-only, event-driven workloads
+- **PostgreSQL wire compatible**: Uses PostgreSQL protocol but with streaming semantics
+
+This makes RisingWave ideal for:
+- ✅ Real-time analytics and metrics
+- ✅ Event streaming and processing
+- ✅ Append-heavy blockchain data ingestion
+- ❌ Traditional OLTP applications requiring transactions
+
 #### Setup Example
 ```bash
 # Start RisingWave (example with Docker)
