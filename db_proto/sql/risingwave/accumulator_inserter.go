@@ -133,7 +133,7 @@ func (i *AccumulatorInserter) flush(database *Database) error {
 		}
 		insert := strings.Trim(b.String(), ",")
 
-		_, err := database.tx.Exec(insert)
+		_, err := database.execSql(insert)
 		if err != nil {
 			shortInsert := insert
 			if len(insert) > 256 {
