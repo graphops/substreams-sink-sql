@@ -47,6 +47,7 @@ func (i *RowInserter) init(database *Database) error {
 		insertStatements[table.Name] = stmt
 	}
 
+	// RisingWave supports RETURNING clause as of release #7094
 	insertQueries["_blocks_"] = fmt.Sprintf("INSERT INTO %s (number, hash, timestamp) VALUES ($1, $2, $3) RETURNING number", tableName(database.schema.Name, "_blocks_"))
 	bs, err := database.db.Prepare(insertQueries["_blocks_"])
 	if err != nil {

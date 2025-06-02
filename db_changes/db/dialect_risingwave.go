@@ -392,14 +392,14 @@ func (d *RisingwaveDialect) prepareStatement(schema string, o *Operation) (strin
 			updates[i] = fmt.Sprintf("%s=EXCLUDED.%s", columns[i], columns[i])
 		}
 
-		insertQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s;",
+		// RisingWave doesn't support PostgreSQL's ON CONFLICT syntax in INSERT statements
+		// For UPSERT/INSERT operations, we need to ensure the table is created with ON CONFLICT OVERWRITE
+		// This is a limitation - tables must be created with appropriate conflict handling
+		insertQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
 			o.table.identifier,
 			strings.Join(columns, ","),
 			strings.Join(values, ","),
-			strings.Join(maps.Keys(o.primaryKey), ","),
-			strings.Join(updates, ", "),
 		)
-
 		if o.reversibleBlockNum != nil {
 			return d.saveUpsert(schema, o.table.nameEscaped, o.primaryKey, *o.reversibleBlockNum) + insertQuery, nil
 		}
