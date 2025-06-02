@@ -322,26 +322,11 @@ func (d *Database) StoreCursor(cursor *sink.Cursor) error {
 }
 
 func (d *Database) HandleBlocksUndo(lastValidBlockNum uint64) (err error) {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("HandleBlocksUndo beginning transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			e := tx.Rollback()
-			if e != nil {
-				err = fmt.Errorf("HandleBlocksUndo rolling back transaction: %w", e)
-			}
-			err = fmt.Errorf("HandleBlocksUndo processing entity: %w", err)
-
-			return
-		}
-		err = tx.Commit()
-	}()
-
+	// RisingWave operates in autocommit mode - execute operations directly without transactions
 	d.logger.Info("undoing blocks", zap.Uint64("last_valid_block_num", lastValidBlockNum))
+	
 	query := fmt.Sprintf(`DELETE FROM %s._blocks_ WHERE "number" > $1`, d.schema.Name)
-	result, err := tx.Exec(query, lastValidBlockNum)
+	result, err := d.execSql(query, lastValidBlockNum)
 	if err != nil {
 		return fmt.Errorf("deleting block from %d: %w", lastValidBlockNum, err)
 	}
