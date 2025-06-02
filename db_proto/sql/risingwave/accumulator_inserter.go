@@ -46,7 +46,10 @@ func (i *AccumulatorInserter) init(database *Database) error {
 		query: fmt.Sprintf("INSERT INTO %s (number, hash, timestamp) VALUES ", tableName(database.schema.Name, "_blocks_")),
 	}
 
-	cursorQuery := fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET cursor = $2", tableName(database.schema.Name, "_cursor_"))
+	// RisingWave doesn't support PostgreSQL's ON CONFLICT syntax
+	// We'll use a simple INSERT for the cursor, relying on the table to handle conflicts
+	// The _cursor_ table should be created with appropriate ON CONFLICT behavior
+	cursorQuery := fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2)", tableName(database.schema.Name, "_cursor_"))
 	cs, err := database.db.Prepare(cursorQuery)
 	if err != nil {
 		return fmt.Errorf("preparing statement %q: %w", cursorQuery, err)

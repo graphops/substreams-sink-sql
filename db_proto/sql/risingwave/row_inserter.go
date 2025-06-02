@@ -54,7 +54,9 @@ func (i *RowInserter) init(database *Database) error {
 	}
 	insertStatements["_blocks_"] = bs
 
-	insertQueries["_cursor_"] = fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET cursor = $2", tableName(database.schema.Name, "_cursor_"))
+	// RisingWave doesn't support PostgreSQL's ON CONFLICT syntax in INSERT statements
+	// The _cursor_ table is created with ON CONFLICT OVERWRITE to handle this automatically
+	insertQueries["_cursor_"] = fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2)", tableName(database.schema.Name, "_cursor_"))
 	cs, err := database.db.Prepare(insertQueries["_cursor_"])
 	if err != nil {
 		return fmt.Errorf("preparing statement %q: %w", insertQueries["_cursor_"], err)
