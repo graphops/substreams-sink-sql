@@ -59,6 +59,14 @@ func NewDialectRisingwave(schemaName string, tableRegistry map[string]*schema.Ta
 	return d, nil
 }
 
+func (d *DialectRisingwave) UseVersionField() bool {
+	return false
+}
+
+func (d *DialectRisingwave) UseDeletedField() bool {
+	return false
+}
+
 func (d *DialectRisingwave) init() error {
 	d.AddPrimaryKeySql("_blocks_", fmt.Sprintf("alter table %s._blocks_ add constraint block_pk primary key (number);", d.schemaName))
 	return nil
