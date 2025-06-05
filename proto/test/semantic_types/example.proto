@@ -1,0 +1,211 @@
+syntax = "proto3";
+import "google/protobuf/timestamp.proto";
+import "sf/substreams/sink/sql/schema/v1/schema.proto";
+
+package test.semantic_types;
+option go_package = "test/semantic_types";
+
+// Example demonstrating semantic type annotations for RisingWave rw_int256 support
+message Output {
+  repeated Entity entities = 1;
+}
+
+message Entity {
+  oneof entity {
+    EthereumTransaction eth_transaction = 1;
+    ERC20Transfer erc20_transfer = 2;
+    DeFiPosition defi_position = 3;
+    MetricsData metrics_data = 4;
+  }
+}
+
+// Ethereum transaction with semantic types optimized for RisingWave
+message EthereumTransaction {
+  option (sf.substreams.sink.sql.schema.v1.table) = { name: "eth_transactions" };
+  
+  // Transaction hash - optimized storage for 32-byte hashes
+  string hash = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+    name: "tx_hash",
+    primary_key: true,
+    semantic_type: "hash"
+  }];
+  
+  // Block hash
+  string block_hash = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "hash"
+  }];
+  
+  // Transaction value in wei - uses RisingWave's rw_int256 for large numbers
+  string value = 3 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "uint256",
+    format_hint: "decimal"
+  }];
+  
+  // Gas price in wei - also uses rw_int256
+  string gas_price = 4 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "uint256",
+    format_hint: "decimal"
+  }];
+  
+  // From address - optimized VARCHAR(42) storage
+  string from_address = 5 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // To address
+  string to_address = 6 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // Input data as hex
+  string input_data = 7 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "hex"
+  }];
+  
+  // Block timestamp
+  int64 block_timestamp = 8 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "unix_timestamp"
+  }];
+  
+  // Gas used (regular integer, not 256-bit)
+  int64 gas_used = 9;
+  
+  // Transaction index in block
+  int32 transaction_index = 10;
+}
+
+// ERC20 transfer events with precise decimal handling
+message ERC20Transfer {
+  option (sf.substreams.sink.sql.schema.v1.table) = { 
+    name: "erc20_transfers",
+    child_of: "eth_transactions on tx_hash"
+  };
+  
+  // Contract address
+  string contract_address = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // From address
+  string from_address = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // To address  
+  string to_address = 3 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // Transfer amount - 18 decimal places for most ERC20 tokens
+  string amount = 4 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "decimal18",
+    format_hint: "decimal"
+  }];
+  
+  // USDC amount example - 6 decimal places
+  string usdc_amount = 5 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "decimal6",
+    format_hint: "decimal"
+  }];
+  
+  // Log index in transaction
+  int32 log_index = 6;
+}
+
+// DeFi position with various numeric types
+message DeFiPosition {
+  option (sf.substreams.sink.sql.schema.v1.table) = { name: "defi_positions" };
+  
+  // Position ID as UUID
+  string position_id = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+    primary_key: true,
+    semantic_type: "uuid"
+  }];
+  
+  // User address
+  string user_address = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // Protocol address
+  string protocol_address = 3 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "address"
+  }];
+  
+  // Collateral amount (18 decimals)
+  string collateral_amount = 4 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "decimal18"
+  }];
+  
+  // Debt amount (18 decimals)
+  string debt_amount = 5 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "decimal18"  
+  }];
+  
+  // Liquidation threshold (percentage with 18 decimals)
+  string liquidation_threshold = 6 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "decimal18"
+  }];
+  
+  // Position metadata as JSON
+  string metadata = 7 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "json"
+  }];
+  
+  // Created timestamp
+  int64 created_at = 8 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "unix_timestamp"
+  }];
+  
+  // Updated timestamp (milliseconds)
+  int64 updated_at_ms = 9 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "unix_timestamp_ms"
+  }];
+}
+
+// Metrics and monitoring data
+message MetricsData {
+  option (sf.substreams.sink.sql.schema.v1.table) = { name: "metrics" };
+  
+  // Metric ID
+  string metric_id = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+    primary_key: true,
+    semantic_type: "uuid"
+  }];
+  
+  // Total value locked in protocol (money type for USD values)
+  string tvl_usd = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "money"
+  }];
+  
+  // Bitcoin amount (8 decimal places)
+  string btc_amount = 3 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "decimal8"
+  }];
+  
+  // Large integer metric (uses rw_int256)
+  string large_metric = 4 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "int256",
+    format_hint: "decimal"  
+  }];
+  
+  // Binary data
+  string binary_data = 5 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "base64"
+  }];
+  
+  // Signature data
+  string signature = 6 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "signature"
+  }];
+  
+  // Public key
+  string public_key = 7 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "pubkey"
+  }];
+  
+  // Measurement timestamp
+  int64 measured_at = 8 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "block_timestamp"
+  }];
+}

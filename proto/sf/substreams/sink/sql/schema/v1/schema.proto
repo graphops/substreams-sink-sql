@@ -1,7 +1,7 @@
 syntax = "proto3";
 import "google/protobuf/descriptor.proto";
 
-package schema;
+package sf.substreams.sink.sql.schema.v1;
 option go_package = "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1";
 
 extend google.protobuf.MessageOptions {
@@ -25,6 +25,9 @@ message Column {
   optional string foreign_key = 2;
   bool unique = 3;
   bool primary_key = 4;
+    // Semantic type annotation for custom SQL type mapping
+  optional string semantic_type = 5;    // Semantic type hint (e.g., "uint256", "address")
+  optional string format_hint = 6;      // Format hint for conversion (e.g., "hex", "decimal")
 }
 
 message ClickhouseTableOptions {
