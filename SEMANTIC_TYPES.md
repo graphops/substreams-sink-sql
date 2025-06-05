@@ -193,8 +193,7 @@ CREATE TABLE eth_transactions (
   gas_price String,                 -- uint256 → String (no native UInt256)
   from_address FixedString(42),     -- address semantic type
   to_address FixedString(42),       -- address semantic type
-  amount_18_decimals Decimal128(18), -- decimal18 semantic type
-  usdc_amount Decimal64(6),         -- decimal6 semantic type
+  token_amount String,              -- uint256 semantic type
   block_timestamp DateTime,         -- unix_timestamp
   metadata String,                  -- json → String fallback
   trace_id String                   -- uuid → String fallback
@@ -311,7 +310,7 @@ message Transaction {
 - Use `uint256`/`int256` for large blockchain values that need arithmetic operations
 - Use `address` for blockchain addresses to get validation and optimal storage
 - Use `hash` for fixed-length hashes (transaction hashes, block hashes)
-- Use appropriate decimal precision (`decimal6` for USDC, `decimal18` for most ERC20s)
+- Use `uint256` for large blockchain values that need full 256-bit precision
 
 ### 2. Use Format Hints Consistently
 - Add `format_hint: "hex"` for fields containing hexadecimal strings
