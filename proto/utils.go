@@ -6,7 +6,7 @@ import (
 
 	proto "github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/desc"
-	"github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
+	schema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
@@ -49,4 +49,23 @@ func FieldInfo(d *desc.FieldDescriptor) *schema.Column {
 			return nil
 		}
 	}
+}
+
+// SemanticTypeInfo extracts semantic type information from field annotations
+func SemanticTypeInfo(d *desc.FieldDescriptor) (semanticType string, formatHint string, hasSemanticType bool) {
+	fieldInfo := FieldInfo(d)
+	if fieldInfo == nil {
+		return "", "", false
+	}
+	
+	if fieldInfo.SemanticType != nil {
+		semanticType = fieldInfo.GetSemanticType()
+		hasSemanticType = true
+	}
+	
+	if fieldInfo.FormatHint != nil {
+		formatHint = fieldInfo.GetFormatHint()
+	}
+	
+	return semanticType, formatHint, hasSemanticType
 }

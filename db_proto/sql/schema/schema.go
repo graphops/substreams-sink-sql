@@ -5,7 +5,7 @@ import (
 
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/jhump/protoreflect/desc"
-	"github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
+	pbSchema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	"github.com/streamingfast/substreams-sink-sql/proto"
 	"go.uber.org/zap"
 )
@@ -55,7 +55,7 @@ func (s *Schema) init(rootMessageDescriptor *desc.MessageDescriptor) error {
 			if s.withProtoOption {
 				return nil
 			}
-			tableInfo = &schema.Table{
+			tableInfo = &pbSchema.Table{
 				Name:    md.GetName(),
 				ChildOf: nil,
 			}
