@@ -38,30 +38,22 @@ message EthereumTransaction {
 
 | Semantic Type | Description | RisingWave | PostgreSQL | ClickHouse |
 |---------------|-------------|------------|------------|------------|
-| `uint256` | 256-bit unsigned integer | `rw_int256` | `NUMERIC(78,0)` | `String` |
+| `uint256` | 256-bit unsigned integer | `rw_uint256` | `NUMERIC(78,0)` | `String` |
 | `int256` | 256-bit signed integer | `rw_int256` | `NUMERIC(78,0)` | `String` |
-| `address` | Blockchain address (42 chars) | `VARCHAR(42)` | `CHAR(42)` | `FixedString(42)` |
-| `hash` | Cryptographic hash (66 chars) | `VARCHAR(66)` | `CHAR(66)` | `FixedString(66)` |
-| `signature` | Cryptographic signature | `VARCHAR` | `VARCHAR` | `String` |
-| `pubkey` | Public key | `VARCHAR` | `VARCHAR` | `String` |
+| `address` | Blockchain address (42 chars) | `CHARACTER VARYING` | `CHAR(42)` | `FixedString(42)` |
+| `hash` | Cryptographic hash (66 chars) | `CHARACTER VARYING` | `CHAR(66)` | `FixedString(66)` |
+| `signature` | Cryptographic signature | `CHARACTER VARYING` | `VARCHAR` | `String` |
+| `pubkey` | Public key | `CHARACTER VARYING` | `VARCHAR` | `String` |
 
-### Precision Numeric Types
-
-| Semantic Type | Description | RisingWave | PostgreSQL | ClickHouse |
-|---------------|-------------|------------|------------|------------|
-| `decimal18` | 18 decimal places (DeFi standard) | `NUMERIC(78,18)` | `NUMERIC(78,18)` | `Decimal128(18)` |
-| `decimal6` | 6 decimal places (USDC standard) | `NUMERIC(38,6)` | `NUMERIC(38,6)` | `Decimal64(6)` |
-| `decimal8` | 8 decimal places (Bitcoin standard) | `NUMERIC(28,8)` | `NUMERIC(28,8)` | `Decimal64(8)` |
-| `money` | Currency/monetary values | `NUMERIC(19,4)` | `NUMERIC(19,4)` | `Decimal64(4)` |
 
 ### Text/Binary Types
 
 | Semantic Type | Description | RisingWave | PostgreSQL | ClickHouse |
 |---------------|-------------|------------|------------|------------|
-| `hex` | Hexadecimal string | `VARCHAR` | `VARCHAR` | `String` |
-| `base64` | Base64 encoded data | `VARCHAR` | `TEXT` | `String` |
+| `hex` | Hexadecimal string | `CHARACTER VARYING` | `VARCHAR` | `String` |
+| `base64` | Base64 encoded data | `CHARACTER VARYING` | `TEXT` | `String` |
 | `json` | JSON structured data | `JSONB` | `JSONB` | `String` |
-| `uuid` | UUID identifier | `VARCHAR(36)` | `UUID` | `String` |
+| `uuid` | UUID identifier | `CHARACTER VARYING` | `UUID` | `String` |
 
 ### Time Types
 
@@ -121,13 +113,10 @@ message EthereumTransaction {
     semantic_type: "address"
   }];
   
-  // Precision decimals for token amounts
-  string amount_18_decimals = 7 [(sf.substreams.sink.sql.schema.v1.field) = {
-    semantic_type: "decimal18"
-  }];
-  
-  string usdc_amount = 8 [(sf.substreams.sink.sql.schema.v1.field) = {
-    semantic_type: "decimal6"
+  // Large token amounts - use uint256 for full precision
+  string token_amount = 7 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "uint256",
+    format_hint: "decimal"
   }];
   
   // Timestamps
@@ -152,29 +141,27 @@ message EthereumTransaction {
 ### RisingWave Output
 ```sql
 CREATE TABLE eth_transactions (
-  tx_hash VARCHAR(66),              -- hash semantic type
-  block_hash VARCHAR(66),           -- hash semantic type
-  value rw_int256,                  -- uint256 → rw_int256 (RisingWave-specific)
-  gas_price rw_int256,              -- uint256 → rw_int256
-  from_address VARCHAR(42),         -- address semantic type
-  to_address VARCHAR(42),           -- address semantic type
-  amount_18_decimals NUMERIC(78,18), -- decimal18 semantic type
-  usdc_amount NUMERIC(38,6),        -- decimal6 semantic type
+  tx_hash CHARACTER VARYING,       -- hash semantic type
+  block_hash CHARACTER VARYING,    -- hash semantic type
+  value rw_uint256,                 -- uint256 → rw_uint256 (RisingWave-specific)
+  gas_price rw_uint256,             -- uint256 → rw_uint256
+  from_address CHARACTER VARYING,  -- address semantic type
+  to_address CHARACTER VARYING,    -- address semantic type
+  token_amount rw_uint256,           -- uint256 semantic type
   block_timestamp TIMESTAMP WITH TIME ZONE, -- unix_timestamp
   metadata JSONB,                   -- json semantic type
-  trace_id VARCHAR(36)              -- uuid semantic type
+  trace_id CHARACTER VARYING       -- uuid semantic type
 );
 
 -- Sample insert with rw_int256 casting
 INSERT INTO eth_transactions VALUES (
   '0x1234...abcd',
   '0x5678...efab', 
-  '115792089237316195423570985008687907853269984665640564039457584007913129639935'::rw_int256,
-  '0x1bc16d674ec80000'::rw_int256,
+  '115792089237316195423570985008687907853269984665640564039457584007913129639935'::rw_uint256,
+  '0x1bc16d674ec80000'::rw_uint256,
   '0x742d35cc6636C0532925a3b8D0A3e5A5F2d5De8e',
   '0x8ba1f109551bD432803012645Hac136c5ae5c9e6',
-  '1000.123456789012345678',
-  '1000.123456',
+  '1000123456789012345678'::rw_uint256,
   '2024-01-01 00:00:00+00',
   '{"type": "transfer"}'::jsonb,
   '550e8400-e29b-41d4-a716-446655440000'
@@ -190,8 +177,7 @@ CREATE TABLE eth_transactions (
   gas_price NUMERIC(78,0),          -- uint256 → NUMERIC fallback
   from_address CHAR(42),            -- address semantic type
   to_address CHAR(42),              -- address semantic type
-  amount_18_decimals NUMERIC(78,18), -- decimal18 semantic type
-  usdc_amount NUMERIC(38,6),        -- decimal6 semantic type
+  token_amount rw_uint256,           -- uint256 semantic type
   block_timestamp TIMESTAMP WITH TIME ZONE, -- unix_timestamp
   metadata JSONB,                   -- json semantic type
   trace_id UUID                     -- uuid → PostgreSQL UUID type
@@ -203,8 +189,8 @@ CREATE TABLE eth_transactions (
 CREATE TABLE eth_transactions (
   tx_hash FixedString(66),          -- hash semantic type
   block_hash FixedString(66),       -- hash semantic type
-  value String,                     -- uint256 → String fallback  
-  gas_price String,                 -- uint256 → String fallback
+  value String,                     -- uint256 → String (no native UInt256)  
+  gas_price String,                 -- uint256 → String (no native UInt256)
   from_address FixedString(42),     -- address semantic type
   to_address FixedString(42),       -- address semantic type
   amount_18_decimals Decimal128(18), -- decimal18 semantic type
@@ -217,7 +203,7 @@ CREATE TABLE eth_transactions (
 
 ## Value Conversion Examples
 
-### RisingWave rw_int256 Conversion
+### RisingWave rw_uint256 and rw_int256 Conversion
 
 **Input Values:**
 ```protobuf
@@ -228,11 +214,14 @@ gas_price: "0x1bc16d674ec80000"
 
 **Generated SQL:**
 ```sql
--- Decimal format
-INSERT INTO table VALUES ('115792089237316195423570985008687907853269984665640564039457584007913129639935'::rw_int256);
+-- Decimal format for uint256
+INSERT INTO table VALUES ('115792089237316195423570985008687907853269984665640564039457584007913129639935'::rw_uint256);
 
--- Hex format  
-INSERT INTO table VALUES ('0x1bc16d674ec80000'::rw_int256);
+-- Hex format for uint256  
+INSERT INTO table VALUES ('0x1bc16d674ec80000'::rw_uint256);
+
+-- Signed values use rw_int256
+INSERT INTO table VALUES ('-12345'::rw_int256);
 ```
 
 ### Address Validation
@@ -329,10 +318,11 @@ message Transaction {
 - Add `format_hint: "decimal"` for fields containing decimal number strings
 - Consistent format hints help with validation and conversion
 
-### 3. Leverage RisingWave Features
-- Use `uint256`/`int256` semantic types to take advantage of RisingWave's `rw_int256` type
-- This enables efficient storage and arithmetic operations on large integers
-- Falls back gracefully to `NUMERIC` types in PostgreSQL and `String` in ClickHouse
+### 3. Leverage Database-Specific Features
+- **RisingWave**: Use `uint256`/`int256` semantic types to leverage `rw_uint256`/`rw_int256` for efficient 256-bit arithmetic
+- **PostgreSQL**: Semantic types map to optimized native types like `UUID`, `JSONB`, and `NUMERIC` with proper precision
+- **ClickHouse**: Leverages native `UInt256`/`Int256`, `FixedString`, and `Decimal` types for optimal performance
+- All dialects gracefully handle unsupported semantic types with appropriate fallbacks
 
 ### 4. Plan for Multi-Dialect Deployment
 - Test your schema generation across all target dialects
@@ -375,17 +365,30 @@ substreams-sink-sql from-proto "clickhouse://..." manifest.yaml
 ## Performance Impact
 
 ### RisingWave Benefits
-- `rw_int256` provides native 256-bit arithmetic operations
+- `rw_uint256` and `rw_int256` provide native 256-bit arithmetic operations
+- Proper unsigned/signed type distinction for accurate mathematical operations
 - Optimized storage for large integers compared to string fallbacks  
 - Better query performance for mathematical operations on blockchain data
 
+### PostgreSQL Benefits
+- Native `UUID` type for efficient UUID operations and indexing
+- `JSONB` for structured data queries with GIN indexing support
+- Fixed-length `CHAR` types for blockchain addresses and hashes provide storage optimization
+- Proper `NUMERIC` precision prevents overflow issues with large numbers
+
+### ClickHouse Benefits
+- `FixedString` types provide optimal storage for fixed-length data like addresses and hashes
+- Specialized `Decimal` types with configurable precision for financial calculations
+- `String` type for large integers (256-bit values) with efficient columnar compression
+- Columnar storage optimizations work best with proper type selection
+
 ### Storage Optimization
-- `address` and `hash` types use fixed-length storage where supported
+- `address` and `hash` types use fixed-length storage where supported across all dialects
 - Precision decimal types prevent unnecessary precision overhead
-- JSON types enable efficient structured data queries
+- JSON types enable efficient structured data queries (JSONB in PostgreSQL/RisingWave)
 
 ### Query Performance
-- Semantic types enable database-specific optimizations
+- Semantic types enable database-specific optimizations across all supported dialects
 - Proper type selection improves index performance
 - Reduced type conversion overhead in queries
 

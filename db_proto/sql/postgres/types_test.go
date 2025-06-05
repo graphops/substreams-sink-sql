@@ -1,4 +1,4 @@
-package risingwave
+package postgres
 
 import (
 	"testing"
@@ -28,7 +28,7 @@ func TestValueToString(t *testing.T) {
 		{"int", int(789), "789"},
 
 		// Unsigned integer values
-		{"uint64", uint64(123), "123"},
+		{"uint64", uint64(123), "'123'"},
 		{"uint32", uint32(456), "456"},
 		{"uint", uint(789), "789"},
 
@@ -40,9 +40,9 @@ func TestValueToString(t *testing.T) {
 		{"bool true", true, "true"},
 		{"bool false", false, "false"},
 
-		// Byte slice (should be hex encoded with uppercase)
-		{"bytes", []uint8{0xDE, 0xAD, 0xBE, 0xEF}, "'\\xDEADBEEF'"},
-		{"empty bytes", []uint8{}, "'\\x'"},
+		// Byte slice (should be base64 encoded)
+		{"bytes", []uint8{0xDE, 0xAD, 0xBE, 0xEF}, "'3q2+7w=='"},
+		{"empty bytes", []uint8{}, "''"},
 
 		// Time values
 		{"time", time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC), "'2023-01-15T10:30:00Z'"},
@@ -76,24 +76,20 @@ func TestDataTypeString(t *testing.T) {
 		dataType DataType
 		expected string
 	}{
-		{TypeSmallInt, "SMALLINT"},
-		{TypeInteger, "INTEGER"},
-		{TypeBigInt, "BIGINT"},
 		{TypeNumeric, "NUMERIC"},
-		{TypeReal, "REAL"},
-		{TypeDouble, "DOUBLE PRECISION"},
+		{TypeInteger, "INTEGER"},
 		{TypeBool, "BOOLEAN"},
-		{TypeVarchar, "CHARACTER VARYING"},
-		{TypeText, "CHARACTER VARYING"},
-		{TypeBytea, "BYTEA"},
-		{TypeDate, "DATE"},
-		{TypeTime, "TIME"},
+		{TypeBigInt, "BIGINT"},
+		{TypeDecimal, "DECIMAL"},
+		{TypeDouble, "DOUBLE PRECISION"},
+		{TypeText, "TEXT"},
+		{TypeBlob, "BLOB"},
+		{TypeVarchar, "VARCHAR(255)"},
 		{TypeTimestamp, "TIMESTAMP"},
 		{TypeTimestamptz, "TIMESTAMP WITH TIME ZONE"},
-		{TypeInterval, "INTERVAL"},
 		{TypeJsonb, "JSONB"},
-		{TypeRwInt256, "rw_int256"},
-		{TypeRwUint256, "rw_uint256"},
+		{TypeUUID, "UUID"},
+		{TypeChar, "CHAR"},
 	}
 
 	for _, tt := range tests {
@@ -111,33 +107,39 @@ func TestMapSemanticType(t *testing.T) {
 		shouldSupport  bool
 	}{
 		{
-			name:          "uint256 maps to rw_uint256",
+			name:          "uint256 maps to NUMERIC(78,0)",
 			semanticType:  sql2.SemanticUint256,
-			expectedSQL:   "rw_uint256",
+			expectedSQL:   "NUMERIC(78,0)",
 			shouldSupport: true,
 		},
 		{
-			name:          "int256 maps to rw_int256",
+			name:          "int256 maps to NUMERIC(78,0)",
 			semanticType:  sql2.SemanticInt256,
-			expectedSQL:   "rw_int256",
+			expectedSQL:   "NUMERIC(78,0)",
 			shouldSupport: true,
 		},
 		{
-			name:          "address maps to CHARACTER VARYING",
+			name:          "address maps to CHAR(42)",
 			semanticType:  sql2.SemanticAddress,
-			expectedSQL:   "CHARACTER VARYING",
+			expectedSQL:   "CHAR(42)",
 			shouldSupport: true,
 		},
 		{
-			name:          "hash maps to CHARACTER VARYING",
+			name:          "hash maps to CHAR(66)",
 			semanticType:  sql2.SemanticHash,
-			expectedSQL:   "CHARACTER VARYING",
+			expectedSQL:   "CHAR(66)",
 			shouldSupport: true,
 		},
 		{
 			name:          "json maps to JSONB",
 			semanticType:  sql2.SemanticJSON,
 			expectedSQL:   "JSONB",
+			shouldSupport: true,
+		},
+		{
+			name:          "uuid maps to UUID",
+			semanticType:  sql2.SemanticUUID,
+			expectedSQL:   "UUID",
 			shouldSupport: true,
 		},
 		{
@@ -167,7 +169,7 @@ func TestMapSemanticType(t *testing.T) {
 	}
 }
 
-func TestConvertToRwUint256(t *testing.T) {
+func TestConvertToNumeric(t *testing.T) {
 	tests := []struct {
 		name        string
 		value       interface{}
@@ -179,109 +181,42 @@ func TestConvertToRwUint256(t *testing.T) {
 			name:        "hex string with 0x prefix",
 			value:       "0x1234567890abcdef",
 			formatHint:  "hex",
-			expected:    "'0x1234567890abcdef'::rw_uint256",
+			expected:    "1311768467294899695", // converted to decimal
 			shouldError: false,
 		},
 		{
 			name:        "hex string without 0x prefix with hex hint",
 			value:       "1234567890abcdef",
 			formatHint:  "hex",
-			expected:    "'0x1234567890abcdef'::rw_uint256",
+			expected:    "1311768467294899695", // converted to decimal
 			shouldError: false,
 		},
 		{
 			name:        "decimal string",
 			value:       "123456789012345678901234567890",
 			formatHint:  "decimal",
-			expected:    "'123456789012345678901234567890'::rw_uint256",
+			expected:    "'123456789012345678901234567890'",
 			shouldError: false,
 		},
 		{
 			name:        "byte array",
 			value:       []byte{0x12, 0x34, 0x56, 0x78},
 			formatHint:  "",
-			expected:    "'0x12345678'::rw_uint256",
-			shouldError: false,
-		},
-		{
-			name:        "uint64 value",
-			value:       uint64(12345),
-			formatHint:  "",
-			expected:    "'12345'::rw_uint256",
-			shouldError: false,
-		},
-		{
-			name:        "unsupported type",
-			value:       float64(123.45),
-			formatHint:  "",
-			expected:    "",
-			shouldError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := convertToRwUint256(tt.value, tt.formatHint)
-			
-			if tt.shouldError {
-				assert.Error(t, err, "convertToRwUint256() should error")
-				return
-			}
-			
-			assert.NoError(t, err, "convertToRwUint256() should not error")
-			assert.Equal(t, tt.expected, result, "convertToRwUint256() result")
-		})
-	}
-}
-
-func TestConvertToRwInt256(t *testing.T) {
-	tests := []struct {
-		name        string
-		value       interface{}
-		formatHint  string
-		expected    string
-		shouldError bool
-	}{
-		{
-			name:        "hex string with 0x prefix",
-			value:       "0x1234567890abcdef",
-			formatHint:  "hex",
-			expected:    "'0x1234567890abcdef'::rw_int256",
-			shouldError: false,
-		},
-		{
-			name:        "hex string without 0x prefix with hex hint",
-			value:       "1234567890abcdef",
-			formatHint:  "hex",
-			expected:    "'0x1234567890abcdef'::rw_int256",
-			shouldError: false,
-		},
-		{
-			name:        "decimal string",
-			value:       "123456789012345678901234567890",
-			formatHint:  "decimal",
-			expected:    "'123456789012345678901234567890'::rw_int256",
-			shouldError: false,
-		},
-		{
-			name:        "byte array",
-			value:       []byte{0x12, 0x34, 0x56, 0x78},
-			formatHint:  "",
-			expected:    "'0x12345678'::rw_int256",
+			expected:    "305419896", // converted to decimal
 			shouldError: false,
 		},
 		{
 			name:        "int64 value",
 			value:       int64(12345),
 			formatHint:  "",
-			expected:    "'12345'::rw_int256",
+			expected:    "12345",
 			shouldError: false,
 		},
 		{
 			name:        "uint64 value",
 			value:       uint64(12345),
 			formatHint:  "",
-			expected:    "'12345'::rw_int256",
+			expected:    "12345",
 			shouldError: false,
 		},
 		{
@@ -295,15 +230,15 @@ func TestConvertToRwInt256(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := convertToRwInt256(tt.value, tt.formatHint)
+			result, err := convertToNumeric(tt.value, tt.formatHint)
 			
 			if tt.shouldError {
-				assert.Error(t, err, "convertToRwInt256() should error")
+				assert.Error(t, err, "convertToNumeric() should error")
 				return
 			}
 			
-			assert.NoError(t, err, "convertToRwInt256() should not error")
-			assert.Equal(t, tt.expected, result, "convertToRwInt256() result")
+			assert.NoError(t, err, "convertToNumeric() should not error")
+			assert.Equal(t, tt.expected, result, "convertToNumeric() result")
 		})
 	}
 }
@@ -391,7 +326,7 @@ func TestConvertSemanticValue(t *testing.T) {
 			shouldError:  false,
 		},
 		{
-			name:         "json conversion",
+			name:         "jsonb conversion",
 			semanticType: sql2.SemanticJSON,
 			value:        `{"key": "value"}`,
 			formatHint:   "",
