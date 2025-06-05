@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,22 +10,28 @@ import (
 
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/jhump/protoreflect/desc"
+	sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
+	"github.com/streamingfast/substreams-sink-sql/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type DataType string
 
 const (
-	TypeNumeric   DataType = "NUMERIC"
-	TypeInteger   DataType = "INTEGER"
-	TypeBool      DataType = "BOOLEAN"
-	TypeBigInt    DataType = "BIGINT"
-	TypeDecimal   DataType = "DECIMAL"
-	TypeDouble    DataType = "DOUBLE PRECISION"
-	TypeText      DataType = "TEXT"
-	TypeBlob      DataType = "BLOB"
-	TypeVarchar   DataType = "VARCHAR(255)"
-	TypeTimestamp DataType = "TIMESTAMP"
+	TypeNumeric     DataType = "NUMERIC"
+	TypeInteger     DataType = "INTEGER"
+	TypeBool        DataType = "BOOLEAN"
+	TypeBigInt      DataType = "BIGINT"
+	TypeDecimal     DataType = "DECIMAL"
+	TypeDouble      DataType = "DOUBLE PRECISION"
+	TypeText        DataType = "TEXT"
+	TypeBlob        DataType = "BLOB"
+	TypeVarchar     DataType = "VARCHAR(255)"
+	TypeTimestamp   DataType = "TIMESTAMP"
+	TypeTimestamptz DataType = "TIMESTAMP WITH TIME ZONE"
+	TypeJsonb       DataType = "JSONB"
+	TypeUUID        DataType = "UUID"
+	TypeChar        DataType = "CHAR"
 )
 
 func (s DataType) String() string {
@@ -40,7 +47,51 @@ func IsWellKnownType(fd *desc.FieldDescriptor) bool {
 	}
 }
 
+// MapSemanticType maps semantic types to PostgreSQL-specific SQL types
+func MapSemanticType(semanticType sql2.SemanticType) (string, bool) {
+	switch semanticType {
+	case sql2.SemanticUint256, sql2.SemanticInt256:
+		return "NUMERIC(78,0)", true // PostgreSQL NUMERIC for 256-bit integers
+	case sql2.SemanticAddress:
+		return "CHAR(42)", true // Fixed-length for blockchain addresses
+	case sql2.SemanticHash:
+		return "CHAR(66)", true // Fixed-length for blockchain hashes
+	case sql2.SemanticSignature:
+		return "VARCHAR", true
+	case sql2.SemanticPubkey:
+		return "VARCHAR", true
+	case sql2.SemanticHex:
+		return "VARCHAR", true
+	case sql2.SemanticBase64:
+		return "TEXT", true
+	case sql2.SemanticJSON:
+		return string(TypeJsonb), true // PostgreSQL native JSONB
+	case sql2.SemanticUUID:
+		return string(TypeUUID), true // PostgreSQL native UUID
+	case sql2.SemanticUnixTimestamp, sql2.SemanticUnixTimestampMS, sql2.SemanticBlockTimestamp:
+		return string(TypeTimestamptz), true
+	default:
+		return "", false // Not supported
+	}
+}
+
+// SupportsSemanticType returns true if PostgreSQL supports the semantic type
+func SupportsSemanticType(semanticType sql2.SemanticType) bool {
+	_, supported := MapSemanticType(semanticType)
+	return supported
+}
+
 func MapFieldType(fd *desc.FieldDescriptor) DataType {
+	// Check for semantic type annotation first
+	semanticType, _, hasSemanticType := proto.SemanticTypeInfo(fd)
+	if hasSemanticType {
+		if sqlType, supported := MapSemanticType(sql2.SemanticType(semanticType)); supported {
+			return DataType(sqlType)
+		}
+		// Fall through to default mapping if semantic type not supported
+	}
+
+	// Default protobuf type mapping
 	t := fd.GetType()
 	switch t {
 	case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
@@ -107,4 +158,209 @@ func ValueToString(value any) (s string) {
 		panic(fmt.Sprintf("unsupported type: %T", v))
 	}
 	return
+}
+
+// ConvertSemanticValue converts a value according to semantic type and format hint for PostgreSQL
+func ConvertSemanticValue(semanticType sql2.SemanticType, value interface{}, formatHint string) (string, error) {
+	switch semanticType {
+	case sql2.SemanticUint256, sql2.SemanticInt256:
+		return convertToNumeric(value, formatHint)
+	case sql2.SemanticAddress:
+		return convertToAddress(value)
+	case sql2.SemanticHash:
+		return convertToHash(value)
+	case sql2.SemanticSignature, sql2.SemanticPubkey, sql2.SemanticHex:
+		return convertToHexString(value)
+	case sql2.SemanticJSON:
+		return convertToJSONB(value)
+	case sql2.SemanticUUID:
+		return convertToUUID(value)
+	case sql2.SemanticUnixTimestamp:
+		return convertUnixTimestamp(value, false)
+	case sql2.SemanticUnixTimestampMS:
+		return convertUnixTimestamp(value, true)
+	case sql2.SemanticBlockTimestamp:
+		return convertUnixTimestamp(value, false)
+	default:
+		// Fallback to default value conversion
+		return ValueToString(value), nil
+	}
+}
+
+// convertToNumeric converts values to PostgreSQL NUMERIC type
+func convertToNumeric(value interface{}, formatHint string) (string, error) {
+	switch v := value.(type) {
+	case string:
+		// Handle hex strings (0x...)
+		if strings.HasPrefix(v, "0x") {
+			// Remove 0x prefix for PostgreSQL NUMERIC
+			hexStr := v[2:]
+			// Convert hex to decimal for PostgreSQL
+			if val, err := strconv.ParseUint(hexStr, 16, 64); err == nil {
+				return strconv.FormatUint(val, 10), nil
+			}
+			// For very large hex numbers, keep as string and validate
+			return "'" + v + "'", nil
+		}
+		// Handle decimal strings
+		if formatHint == "hex" && !strings.HasPrefix(v, "0x") {
+			// Convert hex string to decimal
+			if val, err := strconv.ParseUint(v, 16, 64); err == nil {
+				return strconv.FormatUint(val, 10), nil
+			}
+		}
+		return "'" + v + "'", nil
+	case []byte:
+		// Convert bytes to decimal string
+		hexStr := hex.EncodeToString(v)
+		if val, err := strconv.ParseUint(hexStr, 16, 64); err == nil {
+			return strconv.FormatUint(val, 10), nil
+		}
+		return "'0x" + hexStr + "'", nil
+	case int64, uint64, int32, uint32:
+		return fmt.Sprintf("%v", v), nil
+	default:
+		return "", fmt.Errorf("cannot convert %T to numeric", value)
+	}
+}
+
+// convertToAddress converts values to PostgreSQL CHAR(42) format
+func convertToAddress(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		// Validate address format
+		if strings.HasPrefix(v, "0x") {
+			// Has 0x prefix - validate hex part is exactly 40 chars
+			hexPart := v[2:]
+			if len(hexPart) == 40 {
+				return "'" + v + "'", nil
+			}
+			return "", fmt.Errorf("invalid address format: %s (expected 40 hex chars after 0x)", v)
+		}
+		// No 0x prefix - should be exactly 40 hex chars
+		if len(v) == 40 {
+			return "'0x" + v + "'", nil
+		}
+		return "", fmt.Errorf("invalid address format: %s (expected 40 or 42 chars)", v)
+	case []byte:
+		if len(v) == 20 {
+			return "'0x" + hex.EncodeToString(v) + "'", nil
+		}
+		return "", fmt.Errorf("invalid address byte length: %d (expected 20)", len(v))
+	default:
+		return "", fmt.Errorf("cannot convert %T to address", value)
+	}
+}
+
+// convertToHash converts values to PostgreSQL CHAR(66) format
+func convertToHash(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		// Validate hash format
+		if len(v) == 66 && strings.HasPrefix(v, "0x") {
+			return "'" + v + "'", nil
+		}
+		if len(v) == 64 {
+			// Add 0x prefix if missing
+			return "'0x" + v + "'", nil
+		}
+		return "", fmt.Errorf("invalid hash format: %s (expected 64 or 66 chars)", v)
+	case []byte:
+		if len(v) == 32 {
+			return "'0x" + hex.EncodeToString(v) + "'", nil
+		}
+		return "", fmt.Errorf("invalid hash byte length: %d (expected 32)", len(v))
+	default:
+		return "", fmt.Errorf("cannot convert %T to hash", value)
+	}
+}
+
+// convertToHexString converts values to hex string format
+func convertToHexString(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		if strings.HasPrefix(v, "0x") {
+			return "'" + v + "'", nil
+		}
+		// Add 0x prefix if missing
+		return "'0x" + v + "'", nil
+	case []byte:
+		return "'0x" + hex.EncodeToString(v) + "'", nil
+	default:
+		return "", fmt.Errorf("cannot convert %T to hex string", value)
+	}
+}
+
+// convertToDecimal converts values to decimal format
+func convertToDecimal(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return "'" + v + "'", nil
+	case float64, float32:
+		return fmt.Sprintf("%v", v), nil
+	case int64, uint64, int32, uint32, int, uint:
+		return fmt.Sprintf("%v", v), nil
+	default:
+		return "", fmt.Errorf("cannot convert %T to decimal", value)
+	}
+}
+
+// convertToJSONB converts values to PostgreSQL JSONB format
+func convertToJSONB(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		// Assume string is already valid JSON
+		return "'" + strings.ReplaceAll(v, "'", "''") + "'::jsonb", nil
+	default:
+		return "", fmt.Errorf("cannot convert %T to JSONB", value)
+	}
+}
+
+// convertToUUID converts values to PostgreSQL UUID format
+func convertToUUID(value interface{}) (string, error) {
+	switch v := value.(type) {
+	case string:
+		// Basic UUID validation (length check)
+		if len(v) == 36 {
+			return "'" + v + "'::uuid", nil
+		}
+		return "", fmt.Errorf("invalid UUID format: %s (expected 36 chars)", v)
+	default:
+		return "", fmt.Errorf("cannot convert %T to UUID", value)
+	}
+}
+
+// convertUnixTimestamp converts unix timestamps to PostgreSQL timestamp format
+func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error) {
+	var t time.Time
+	
+	switch v := value.(type) {
+	case int64:
+		if isMilliseconds {
+			t = time.Unix(v/1000, (v%1000)*1000000)
+		} else {
+			t = time.Unix(v, 0)
+		}
+	case uint64:
+		if isMilliseconds {
+			t = time.Unix(int64(v/1000), int64((v%1000)*1000000))
+		} else {
+			t = time.Unix(int64(v), 0)
+		}
+	case string:
+		// Try to parse as number
+		if val, err := strconv.ParseInt(v, 10, 64); err == nil {
+			if isMilliseconds {
+				t = time.Unix(val/1000, (val%1000)*1000000)
+			} else {
+				t = time.Unix(val, 0)
+			}
+		} else {
+			return "", fmt.Errorf("cannot parse timestamp string: %s", v)
+		}
+	default:
+		return "", fmt.Errorf("cannot convert %T to timestamp", value)
+	}
+	
+	return "'" + t.UTC().Format(time.RFC3339) + "'", nil
 }
