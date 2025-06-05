@@ -29,8 +29,8 @@ const (
 	TypeBool DataType = "BOOLEAN" // Logical Boolean (true, false, or null)
 
 	// String types
-	TypeVarchar DataType = "VARCHAR" // Variable-length character string (no length limit specified)
-	TypeText    DataType = "VARCHAR" // Use VARCHAR instead of TEXT for RisingWave compatibility
+	TypeVarchar DataType = "CHARACTER VARYING" // Variable-length character string
+	TypeText    DataType = "CHARACTER VARYING" // Use CHARACTER VARYING for RisingWave
 
 	// Binary type
 	TypeBytea DataType = "BYTEA" // Binary strings (hex format)
@@ -42,14 +42,12 @@ const (
 	TypeTimestamptz DataType = "TIMESTAMP WITH TIME ZONE" // Timestamp with time zone
 	TypeInterval    DataType = "INTERVAL"                 // Time span
 
-	// Complex types - basic definitions
-	TypeStruct DataType = "STRUCT" // Nested data structure
-	TypeArray  DataType = "ARRAY"  // Ordered list of elements
-	TypeMap    DataType = "MAP"    // Key-value pairs
-	TypeJsonb  DataType = "JSONB"  // Binary JSON value
+	// Complex types
+	TypeJsonb DataType = "JSONB" // Binary JSON value
 
 	// RisingWave-specific semantic types
-	TypeRwInt256 DataType = "rw_int256" // RisingWave's 256-bit integer type
+	TypeRwInt256  DataType = "rw_int256"  // RisingWave's 256-bit signed integer type
+	TypeRwUint256 DataType = "rw_uint256" // RisingWave's 256-bit unsigned integer type
 )
 
 func (s DataType) String() string {
@@ -68,32 +66,26 @@ func IsWellKnownType(fd *desc.FieldDescriptor) bool {
 // MapSemanticType maps semantic types to RisingWave-specific SQL types
 func MapSemanticType(semanticType sql2.SemanticType) (string, bool) {
 	switch semanticType {
-	case sql2.SemanticUint256, sql2.SemanticInt256:
-		return string(TypeRwInt256), true
+	case sql2.SemanticUint256:
+		return string(TypeRwUint256), true // Use new rw_uint256 for unsigned
+	case sql2.SemanticInt256:
+		return string(TypeRwInt256), true  // Keep rw_int256 for signed
 	case sql2.SemanticAddress:
-		return "VARCHAR(42)", true
+		return "CHARACTER VARYING", true
 	case sql2.SemanticHash:
-		return "VARCHAR(66)", true
+		return "CHARACTER VARYING", true
 	case sql2.SemanticSignature:
-		return "VARCHAR", true
+		return "CHARACTER VARYING", true
 	case sql2.SemanticPubkey:
-		return "VARCHAR", true
-	case sql2.SemanticDecimal18:
-		return "NUMERIC(78,18)", true
-	case sql2.SemanticDecimal6:
-		return "NUMERIC(38,6)", true
-	case sql2.SemanticDecimal8:
-		return "NUMERIC(28,8)", true
-	case sql2.SemanticMoney:
-		return "NUMERIC(19,4)", true
+		return "CHARACTER VARYING", true
 	case sql2.SemanticHex:
-		return "VARCHAR", true
+		return "CHARACTER VARYING", true
 	case sql2.SemanticBase64:
-		return "VARCHAR", true
+		return "CHARACTER VARYING", true
 	case sql2.SemanticJSON:
 		return string(TypeJsonb), true
 	case sql2.SemanticUUID:
-		return "VARCHAR(36)", true
+		return "CHARACTER VARYING", true // RisingWave converts UUID to CHARACTER VARYING
 	case sql2.SemanticUnixTimestamp, sql2.SemanticUnixTimestampMS, sql2.SemanticBlockTimestamp:
 		return string(TypeTimestamptz), true
 	default:
@@ -193,7 +185,9 @@ func ValueToString(value any) (s string) {
 // ConvertSemanticValue converts a value according to semantic type and format hint for RisingWave
 func ConvertSemanticValue(semanticType sql2.SemanticType, value interface{}, formatHint string) (string, error) {
 	switch semanticType {
-	case sql2.SemanticUint256, sql2.SemanticInt256:
+	case sql2.SemanticUint256:
+		return convertToRwUint256(value, formatHint)
+	case sql2.SemanticInt256:
 		return convertToRwInt256(value, formatHint)
 	case sql2.SemanticAddress:
 		return convertToAddress(value)
@@ -201,8 +195,6 @@ func ConvertSemanticValue(semanticType sql2.SemanticType, value interface{}, for
 		return convertToHash(value)
 	case sql2.SemanticSignature, sql2.SemanticPubkey, sql2.SemanticHex:
 		return convertToHexString(value)
-	case sql2.SemanticDecimal18, sql2.SemanticDecimal6, sql2.SemanticDecimal8, sql2.SemanticMoney:
-		return convertToDecimal(value)
 	case sql2.SemanticJSON:
 		return convertToJSON(value)
 	case sql2.SemanticUUID:
@@ -216,6 +208,32 @@ func ConvertSemanticValue(semanticType sql2.SemanticType, value interface{}, for
 	default:
 		// Fallback to default value conversion
 		return ValueToString(value), nil
+	}
+}
+
+// convertToRwUint256 converts values to RisingWave's rw_uint256 type
+func convertToRwUint256(value interface{}, formatHint string) (string, error) {
+	switch v := value.(type) {
+	case string:
+		// Handle hex strings (0x...)
+		if strings.HasPrefix(v, "0x") {
+			return "'" + v + "'::rw_uint256", nil
+		}
+		// Handle decimal strings
+		if formatHint == "hex" && !strings.HasPrefix(v, "0x") {
+			// Add 0x prefix if missing for hex format
+			return "'0x" + v + "'::rw_uint256", nil
+		}
+		return "'" + v + "'::rw_uint256", nil
+	case []byte:
+		// Convert bytes to hex for rw_uint256
+		hexStr := "0x" + hex.EncodeToString(v)
+		return "'" + hexStr + "'::rw_uint256", nil
+	case int64, uint64, int32, uint32:
+		// Convert numeric types to string
+		return "'" + fmt.Sprintf("%v", v) + "'::rw_uint256", nil
+	default:
+		return "", fmt.Errorf("cannot convert %T to rw_uint256", value)
 	}
 }
 
@@ -312,19 +330,6 @@ func convertToHexString(value interface{}) (string, error) {
 	}
 }
 
-// convertToDecimal converts values to decimal format
-func convertToDecimal(value interface{}) (string, error) {
-	switch v := value.(type) {
-	case string:
-		return "'" + v + "'", nil
-	case float64, float32:
-		return fmt.Sprintf("%v", v), nil
-	case int64, uint64, int32, uint32, int, uint:
-		return fmt.Sprintf("%v", v), nil
-	default:
-		return "", fmt.Errorf("cannot convert %T to decimal", value)
-	}
-}
 
 // convertToJSON converts values to JSONB format
 func convertToJSON(value interface{}) (string, error) {

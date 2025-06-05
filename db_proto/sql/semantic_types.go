@@ -15,11 +15,6 @@ const (
 	SemanticSignature SemanticType = "signature" // Cryptographic signature
 	SemanticPubkey    SemanticType = "pubkey"    // Public key
 
-	// Precision numeric types
-	SemanticDecimal18 SemanticType = "decimal18" // 18 decimal places (common in DeFi)
-	SemanticDecimal6  SemanticType = "decimal6"  // 6 decimal places (USDC, etc.)
-	SemanticDecimal8  SemanticType = "decimal8"  // 8 decimal places (Bitcoin)
-	SemanticMoney     SemanticType = "money"     // Currency/monetary values
 
 	// Text/Binary types
 	SemanticHex    SemanticType = "hex"    // Hexadecimal string
@@ -78,30 +73,6 @@ var SemanticTypeRegistry = map[SemanticType]SemanticTypeInfo{
 		Description: "Public key (variable length hex)",
 		DefaultSQL:  "VARCHAR",
 		Validation:  "hex",
-	},
-	SemanticDecimal18: {
-		Name:        SemanticDecimal18,
-		Description: "Decimal with 18 decimal places (DeFi standard)",
-		DefaultSQL:  "NUMERIC(78,18)",
-		Validation:  "decimal",
-	},
-	SemanticDecimal6: {
-		Name:        SemanticDecimal6,
-		Description: "Decimal with 6 decimal places (USDC standard)",
-		DefaultSQL:  "NUMERIC(38,6)",
-		Validation:  "decimal",
-	},
-	SemanticDecimal8: {
-		Name:        SemanticDecimal8,
-		Description: "Decimal with 8 decimal places (Bitcoin standard)",
-		DefaultSQL:  "NUMERIC(28,8)",
-		Validation:  "decimal",
-	},
-	SemanticMoney: {
-		Name:        SemanticMoney,
-		Description: "Monetary value with currency precision",
-		DefaultSQL:  "NUMERIC(19,4)",
-		Validation:  "decimal",
 	},
 	SemanticHex: {
 		Name:        SemanticHex,
