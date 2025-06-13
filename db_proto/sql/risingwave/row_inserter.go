@@ -83,8 +83,13 @@ func createInsertFromDescriptor(table *schema.Table, dialect sql2.Dialect) (stri
 		returningField = table.PrimaryKey.Name
 	}
 
+	// Add block_number
 	fieldCount++
 	fieldNames = append(fieldNames, "block_number")
+	placeholders = append(placeholders, fmt.Sprintf("$%d", fieldCount))
+	
+	// Add block_timestamp
+	fieldCount++
 	fieldNames = append(fieldNames, "block_timestamp")
 	placeholders = append(placeholders, fmt.Sprintf("$%d", fieldCount))
 
@@ -92,7 +97,7 @@ func createInsertFromDescriptor(table *schema.Table, dialect sql2.Dialect) (stri
 		fieldCount++
 		returningField = pk.Name
 		fieldNames = append(fieldNames, pk.Name)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", fieldCount)) //$1
+		placeholders = append(placeholders, fmt.Sprintf("$%d", fieldCount))
 	}
 
 	if table.ChildOf != nil {
@@ -105,7 +110,7 @@ func createInsertFromDescriptor(table *schema.Table, dialect sql2.Dialect) (stri
 		if field.Name == returningField {
 			continue
 		}
-		if field.IsRepeated || field.IsExtension { //not a direct child
+		if field.IsRepeated || field.IsExtension {
 			continue
 		}
 		fieldCount++
@@ -118,9 +123,7 @@ func createInsertFromDescriptor(table *schema.Table, dialect sql2.Dialect) (stri
 		strings.Join(fieldNames, ", "),
 		strings.Join(placeholders, ", "),
 	), nil
-
 }
-
 
 func (i *RowInserter) insert(table string, values []any, database *Database) error {
 	i.logger.Debug("inserting row", zap.String("table", table), zap.Any("values", values))
