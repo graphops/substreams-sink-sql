@@ -66,6 +66,8 @@ func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (s
 	fields := table.Columns
 
 	var fieldNames []string
+	
+	// Add standard block metadata columns
 	fieldNames = append(fieldNames, "block_number")
 	fieldNames = append(fieldNames, "block_timestamp")
 
@@ -82,7 +84,7 @@ func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (s
 			continue
 		}
 
-		if field.IsRepeated || field.IsExtension { //not a direct child
+		if field.IsRepeated || field.IsExtension {
 			continue
 		}
 		fieldNames = append(fieldNames, field.QuotedName())
@@ -92,10 +94,7 @@ func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (s
 		tableName,
 		strings.Join(fieldNames, ", "),
 	), nil
-
 }
-
-
 
 func (i *AccumulatorInserter) insert(table string, values []any, database *Database) error {
 	var v []string
