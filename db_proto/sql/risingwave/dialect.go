@@ -94,6 +94,7 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 	addedColumns["block_timestamp"] = struct{}{}
 
 	// Add parent key for child tables
+	var parentKeyColumns []string
 	if table.ChildOf != nil {
 		parentTable, parentFound := d.TableRegistry[table.ChildOf.ParentTable]
 		if !parentFound {
@@ -105,6 +106,7 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 				if _, exists := addedColumns[parentField.Name]; !exists {
 					sb.WriteString(fmt.Sprintf("%s %s NOT NULL,", parentField.Name, MapFieldType(parentField.FieldDescriptor)))
 					addedColumns[parentField.Name] = struct{}{}
+					parentKeyColumns = append(parentKeyColumns, parentField.Name)
 				}
 				fieldFound = true
 				break
@@ -170,11 +172,28 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 		addedColumns[f.Name] = struct{}{}
 	}
 
-	// Remove the last comma
-	temp := sb.String()
-	temp = temp[:len(temp)-1]
-	sb = strings.Builder{}
-	sb.WriteString(temp)
+	// Add composite primary key if no explicit primary key exists
+	if table.PrimaryKey == nil {
+		// Remove the last comma before adding primary key constraint
+		temp := sb.String()
+		temp = temp[:len(temp)-1]
+		sb = strings.Builder{}
+		sb.WriteString(temp)
+
+		// Build composite primary key: always include block_number, then parent keys if any
+		var pkColumns []string
+		pkColumns = append(pkColumns, "block_number")
+		pkColumns = append(pkColumns, parentKeyColumns...)
+
+		// Create the primary key constraint
+		sb.WriteString(fmt.Sprintf(", PRIMARY KEY (%s)", strings.Join(pkColumns, ", ")))
+	} else {
+		// Remove the last comma for tables with explicit primary key
+		temp := sb.String()
+		temp = temp[:len(temp)-1]
+		sb = strings.Builder{}
+		sb.WriteString(temp)
+	}
 
 	sb.WriteString("\n);\n")
 
