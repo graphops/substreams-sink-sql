@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 	_ "github.com/lib/pq"
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/logging"
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/clickhouse"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/zap"
@@ -628,6 +630,195 @@ func TestSinker_Integration_ParentChildOrdering(t *testing.T) {
 	)
 }
 
+func TestSinker_Integration_ClickHouse_SinglePrimaryKey(t *testing.T) {
+	testTables := db2.TestTables("", map[string]*db2.TableInfo{
+		"xfer": mustNewTableInfo("", "xfer", []string{"id"}, map[string]*db2.ColumnInfo{
+			"id":   db2.NewColumnInfo("id", "String", ""),
+			"from": db2.NewColumnInfo("from", "String", ""),
+			"to":   db2.NewColumnInfo("to", "String", ""),
+		}),
+	})
+
+	dbConnectionString, clickhouseContainer := setupClickhouseContainer(t, testTables, nil)
+
+	type XferSinglePKRow struct {
+		ID   string `db:"id"`
+		From string `db:"from"`
+		To   string `db:"to"`
+	}
+
+	tests := []struct {
+		name                   string
+		events                 []event
+		expectedQueryResponses []*XferSinglePKRow
+		expectedFinalCursor    string
+	}{
+		{
+			"insert final",
+			[]event{
+				newEvent(10, 10,
+					insertRowSinglePK("xfer", "1234", "from", "sender1", "to", "receiver1"),
+				),
+			},
+			[]*XferSinglePKRow{
+				{ID: "1234", From: "sender1", To: "receiver1"},
+			},
+			"Block #10 (10) - LIB #10 (10)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runClickHouseSinkerTest(
+				t,
+				testTables,
+				dbConnectionString,
+				clickhouseContainer,
+				test.events,
+				test.expectedQueryResponses,
+				test.expectedFinalCursor,
+			)
+		})
+	}
+}
+
+func TestSinker_Integration_RisingWave_SinglePrimaryKey(t *testing.T) {
+	testTables := db2.TestTables("public", map[string]*db2.TableInfo{
+		"xfer": mustNewTableInfo("public", "xfer", []string{"id"}, map[string]*db2.ColumnInfo{
+			"id":   db2.NewColumnInfo("id", "text", ""),
+			"from": db2.NewColumnInfo("from", "text", ""),
+			"to":   db2.NewColumnInfo("to", "text", ""),
+		}),
+	})
+
+	dbConnectionString, risingwaveContainer := setupRisingwaveContainer(t, testTables, nil)
+
+	type XferSinglePKRow struct {
+		ID   string `db:"id"`
+		From string `db:"from"`
+		To   string `db:"to"`
+	}
+
+	tests := []struct {
+		name                   string
+		events                 []event
+		expectedQueryResponses []*XferSinglePKRow
+		expectedFinalCursor    string
+	}{
+		{
+			"insert final",
+			[]event{
+				newEvent(10, 10,
+					insertRowSinglePK("xfer", "1234", "from", "sender1", "to", "receiver1"),
+				),
+			},
+			[]*XferSinglePKRow{
+				{ID: "1234", From: "sender1", To: "receiver1"},
+			},
+			"Block #10 (10) - LIB #10 (10)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runRisingWaveSinkerTest(
+				t,
+				testTables,
+				dbConnectionString,
+				risingwaveContainer,
+				test.events,
+				test.expectedQueryResponses,
+				test.expectedFinalCursor,
+			)
+		})
+	}
+}
+
+func runRisingWaveSinkerTest[R any](
+	t *testing.T,
+	tables map[string]*db2.TableInfo,
+	dbDSN string,
+	risingwaveContainer testcontainers.Container,
+	events []event,
+	expectedQueryResponses []R,
+	expectedLogLine string,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	l := db2.NewTestLoader(t, dbDSN, nil, tables, logger, tracer)
+
+	s, err := sink.New(sink.SubstreamsModeDevelopment, false, testPackage, testPackage.Modules.Modules[0], []byte("unused"), testClientConfig, logger, nil)
+	require.NoError(t, err)
+	sinker, _ := New(s, l, logger, nil)
+	t.Cleanup(func() { sinker.loader.Close() })
+
+	require.NoError(t, l.InsertCursor(ctx, sinker.OutputModuleHash(), sink.NewBlankCursor()))
+
+	for _, evt := range events {
+		err := sinker.HandleBlockScopedData(
+			ctx,
+			blockScopedData("db_out", evt.tableChanges, evt.blockNum, evt.libNum),
+			flushEveryBlock, sink.MustNewCursor(simpleCursor(evt.blockNum, evt.libNum)),
+		)
+		require.NoError(t, err)
+	}
+
+	dbx := sqlx.NewDb(l.DB, "postgres")
+
+	var actualQueryResponses []R
+	readQuery := fmt.Sprintf(`SELECT * FROM "%s"."xfer" ORDER BY id`, l.GetDSN().Schema())
+
+	err = dbx.SelectContext(ctx, &actualQueryResponses, readQuery)
+	require.NoError(t, err)
+
+	assert.Equal(t, expectedQueryResponses, actualQueryResponses)
+}
+
+func runClickHouseSinkerTest[R any](
+	t *testing.T,
+	tables map[string]*db2.TableInfo,
+	dbDSN string,
+	clickhouseContainer *clickhouse.ClickHouseContainer,
+	events []event,
+	expectedQueryResponses []R,
+	expectedLogLine string,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	// Note: ClickHouse containers don't have Restore method like PostgreSQL
+	// So we just use the container as-is
+
+	l := db2.NewTestLoader(t, dbDSN, nil, tables, logger, tracer)
+
+	s, err := sink.New(sink.SubstreamsModeDevelopment, false, testPackage, testPackage.Modules.Modules[0], []byte("unused"), testClientConfig, logger, nil)
+	require.NoError(t, err)
+	sinker, _ := New(s, l, logger, nil)
+	t.Cleanup(func() { sinker.loader.Close() })
+
+	require.NoError(t, l.InsertCursor(ctx, sinker.OutputModuleHash(), sink.NewBlankCursor()))
+
+	for _, evt := range events {
+		err := sinker.HandleBlockScopedData(
+			ctx,
+			blockScopedData("db_out", evt.tableChanges, evt.blockNum, evt.libNum),
+			flushEveryBlock, sink.MustNewCursor(simpleCursor(evt.blockNum, evt.libNum)),
+		)
+		require.NoError(t, err)
+	}
+
+	dbx := sqlx.NewDb(l.DB, "clickhouse")
+
+	var actualQueryResponses []R
+	readQuery := "SELECT * FROM xfer ORDER BY id"
+
+	err = dbx.SelectContext(ctx, &actualQueryResponses, readQuery)
+	require.NoError(t, err)
+
+	assert.Equal(t, expectedQueryResponses, actualQueryResponses)
+}
+
 func runSinkerTest[R any](
 	t *testing.T,
 	tables map[string]*db2.TableInfo,
@@ -779,6 +970,108 @@ func setupPostgresContainer(t *testing.T, testTables map[string]*db2.TableInfo, 
 	return dbConnectionString + "&schemaName=testschema", postgresContainer
 }
 
+// setupClickhouseContainer spins up a ClickHouse Docker container and initialize the database with the corresponding
+// testTables. If the testTablesSQL is `nil`, it will generate the SQL from the testTables directly, otherwise
+// it will use the provided SQL to set up the tables.
+func setupClickhouseContainer(t *testing.T, testTables map[string]*db2.TableInfo, testTablesSQL *string) (dbConnectionString string, container *clickhouse.ClickHouseContainer) {
+	t.Helper()
+	ctx := context.Background()
+
+	dbName := "testdb"
+	dbUser := "default"
+	dbPassword := ""
+
+	clickhouseContainer, err := clickhouse.Run(ctx,
+		"clickhouse/clickhouse-server:23.9",
+		clickhouse.WithDatabase(dbName),
+		clickhouse.WithUsername(dbUser),
+		clickhouse.WithPassword(dbPassword),
+		testcontainers.WithWaitStrategy(
+			wait.ForHTTP("/ping").
+				WithPort("8123/tcp").
+				WithStartupTimeout(60*time.Second)),
+	)
+	testcontainers.CleanupContainer(t, clickhouseContainer)
+	require.NoError(t, err)
+
+	dbConnectionString, err = clickhouseContainer.ConnectionString(ctx)
+	require.NoError(t, err)
+
+	l := db2.NewTestLoader(
+		t,
+		dbConnectionString,
+		nil,
+		testTables,
+		logger,
+		tracer,
+	)
+
+	if testTablesSQL == nil {
+		testTablesSQL = ptr(db2.GenerateCreateTableSQL(testTables))
+	}
+
+	err = l.Setup(context.Background(), "", *testTablesSQL, false)
+	require.NoError(t, err)
+
+	require.NoError(t, l.Close())
+
+	return dbConnectionString, clickhouseContainer
+}
+
+// setupRisingwaveContainer spins up a RisingWave Docker container and initialize the database with the corresponding
+// testTables. If the testTablesSQL is `nil`, it will generate the SQL from the testTables directly, otherwise
+// it will use the provided SQL to set up the tables.
+func setupRisingwaveContainer(t *testing.T, testTables map[string]*db2.TableInfo, testTablesSQL *string) (dbConnectionString string, container testcontainers.Container) {
+	t.Helper()
+	ctx := context.Background()
+
+	dbName := "dev"
+	dbUser := "root"
+	dbPassword := ""
+
+	risingwaveContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image: "risingwavelabs/risingwave:latest",
+			ExposedPorts: []string{"4566/tcp", "5691/tcp"},
+			Cmd: []string{"playground"},
+			WaitingFor: wait.ForListeningPort("4566/tcp").
+				WithStartupTimeout(90*time.Second),
+		},
+		Started: true,
+	})
+	testcontainers.CleanupContainer(t, risingwaveContainer)
+	require.NoError(t, err)
+
+	host, err := risingwaveContainer.Host(ctx)
+	require.NoError(t, err)
+	
+	port, err := risingwaveContainer.MappedPort(ctx, "4566")
+	require.NoError(t, err)
+
+	dbConnectionString = fmt.Sprintf("risingwave://%s:%s@%s:%s/%s?sslmode=disable", 
+		dbUser, dbPassword, host, port.Port(), dbName)
+
+	l := db2.NewTestLoader(
+		t,
+		dbConnectionString,
+		nil,
+		testTables,
+		logger,
+		tracer,
+	)
+
+	if testTablesSQL == nil {
+		testTablesSQL = ptr(db2.GenerateCreateTableSQL(testTables))
+	}
+
+	err = l.Setup(context.Background(), "public", *testTablesSQL, false)
+	require.NoError(t, err)
+
+	require.NoError(t, l.Close())
+
+	return dbConnectionString, risingwaveContainer
+}
+
 var T = true
 var flushEveryBlock = &T
 
@@ -899,6 +1192,27 @@ func deleteRowMultiplePK(table string, pk map[string]string) *pbdatabase.TableCh
 			CompositePk: &pbdatabase.CompositePrimaryKey{
 				Keys: pk,
 			},
+		},
+		Operation: pbdatabase.TableChange_OPERATION_DELETE,
+	}
+}
+
+func updateRowSinglePK(table string, pk string, fieldsAndValues ...string) *pbdatabase.TableChange {
+	return &pbdatabase.TableChange{
+		Table: table,
+		PrimaryKey: &pbdatabase.TableChange_Pk{
+			Pk: pk,
+		},
+		Operation: pbdatabase.TableChange_OPERATION_UPDATE,
+		Fields:    getFields(fieldsAndValues...),
+	}
+}
+
+func deleteRowSinglePK(table string, pk string) *pbdatabase.TableChange {
+	return &pbdatabase.TableChange{
+		Table: table,
+		PrimaryKey: &pbdatabase.TableChange_Pk{
+			Pk: pk,
 		},
 		Operation: pbdatabase.TableChange_OPERATION_DELETE,
 	}
