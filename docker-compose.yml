@@ -50,7 +50,7 @@ services:
     container_name: risingwave-ssp2
     image: risingwavelabs/risingwave:latest
     hostname: risingwave
-    command: ["playground"]
+    command: ["standalone"]
     environment:
       - RUST_BACKTRACE=1
     ports:

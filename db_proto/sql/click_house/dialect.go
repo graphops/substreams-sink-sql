@@ -9,7 +9,7 @@ import (
 
 	sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
-	pbSchmema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
+	pbSchema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	"go.uber.org/zap"
 )
 
@@ -280,20 +280,21 @@ func replacingMergeTreeString(table *schema.Table) (string, error) {
 	return fmt.Sprintf("ReplacingMergeTree(%s)", out), nil
 }
 
-func wrapWithClickhouseFunction(fieldName string, function pbSchmema.Function) string {
+func wrapWithClickhouseFunction(fieldName string, function pbSchema.Function) string {
 	format := "%s"
 	switch function {
-	case pbSchmema.Function_unset:
-	case pbSchmema.Function_toMonth:
+	case pbSchema.Function_unset:
+	case pbSchema.Function_toMonth:
 		format = "toMonth(%s)"
-	case pbSchmema.Function_toDate:
+	case pbSchema.Function_toDate:
 		format = "toDate(%s)"
-	case pbSchmema.Function_toStartOfMonth:
-	case pbSchmema.Function_toYear:
+	case pbSchema.Function_toStartOfMonth:
+		format = "toStartOfMonth(%s)"
+	case pbSchema.Function_toYear:
 		format = "toYear(%s)"
-	case pbSchmema.Function_toYYYYDD:
+	case pbSchema.Function_toYYYYDD:
 		format = "toYYYYMMDD(%s)"
-	case pbSchmema.Function_toYYYYMM:
+	case pbSchema.Function_toYYYYMM:
 		format = "toYYYYMM(%s)"
 	}
 	return fmt.Sprintf(format, fieldName)
