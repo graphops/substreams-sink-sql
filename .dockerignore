@@ -1,0 +1,16 @@
+# Exclude development data directories
+devel/data/
+devel/data/postgres
+devel/data/risingwave
+
+# Exclude other development artifacts
+.git
+.gitignore
+*.md
+README.md
+docker-compose.yml
+
+# Exclude any other temporary or cache files
+.cache
+*.log
+*.tmp
