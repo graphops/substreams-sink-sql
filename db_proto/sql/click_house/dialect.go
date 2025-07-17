@@ -257,7 +257,7 @@ func partitionByString(table *schema.Table) (string, error) {
 		return "", fmt.Errorf("clickhouse table options not set for table %q", table.Name)
 	}
 
-	out := sql2.DialectFieldBlockTimestamp
+	out := fmt.Sprintf("toYYYYMM(%s)", sql2.DialectFieldBlockTimestamp)
 	for _, field := range info.PartitionFields {
 		w := wrapWithClickhouseFunction(field.Name, field.Function)
 		out += ", " + w
