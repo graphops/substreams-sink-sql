@@ -307,7 +307,7 @@ func indexString(table *schema.Table) (string, error) {
 			var indexStrings []string
 			for _, indexField := range table.PbTableInfo.ClickhouseTableOptions.IndexFields {
 				fieldName := indexField.FieldName
-				if indexField.Function != pbSchmema.Function_unset {
+				if indexField.Function != pbSchema.Function_unset {
 					fieldName = fmt.Sprintf("%s(%s)", indexField.Function.String(), fieldName)
 				}
 
