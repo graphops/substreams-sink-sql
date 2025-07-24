@@ -10,6 +10,7 @@ import (
 
 	sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
+	pbschema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	"go.uber.org/zap"
 )
 
@@ -195,7 +196,19 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 		sb.WriteString(temp)
 	}
 
-	sb.WriteString("\n);\n")
+	sb.WriteString("\n)")
+
+	// Add storage engine specification for RisingWave-managed tables
+	if table.PbTableInfo != nil && table.PbTableInfo.StorageLayout != nil {
+		storageLayout := table.PbTableInfo.GetStorageLayout()
+		if storageLayout == pbschema.StorageLayout_ICEBERG {
+			// Use RisingWave-managed Iceberg table engine for columnar storage
+			sb.WriteString(" ENGINE = iceberg")
+		}
+		// HUMMOCK is the default storage engine - no ENGINE clause needed
+	}
+	
+	sb.WriteString(";\n")
 
 	d.AddCreateTableSql(table.Name, sb.String())
 

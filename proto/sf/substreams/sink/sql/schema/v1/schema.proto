@@ -16,6 +16,7 @@ message Table {
   string name = 1;
   optional string child_of = 2;
 //  repeated string primary_key_fields = 3;
+  optional StorageLayout storage_layout = 4;  // RisingWave storage engine choice
 
   optional ClickhouseTableOptions clickhouse_table_options = 200;
 }
@@ -76,4 +77,10 @@ enum Function {
   toMonth = 4;
   toDate = 5;
   toStartOfMonth = 6;
+}
+
+// Storage layout options for RisingWave tables
+enum StorageLayout {
+  HUMMOCK = 0;  // Default: Row-oriented streaming storage engine
+  ICEBERG = 1;  // Columnar analytical storage with Iceberg integration
 }

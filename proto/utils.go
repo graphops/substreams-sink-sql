@@ -69,3 +69,18 @@ func SemanticTypeInfo(d *desc.FieldDescriptor) (semanticType string, formatHint 
 	
 	return semanticType, formatHint, hasSemanticType
 }
+
+// StorageLayoutInfo extracts storage layout configuration from table annotations
+func StorageLayoutInfo(d *desc.MessageDescriptor) (storageLayout schema.StorageLayout, hasStorageLayout bool) {
+	tableInfo := TableInfo(d)
+	if tableInfo == nil {
+		return schema.StorageLayout_HUMMOCK, false
+	}
+	
+	if tableInfo.StorageLayout != nil {
+		return tableInfo.GetStorageLayout(), true
+	}
+	
+	// Default to Hummock if not specified
+	return schema.StorageLayout_HUMMOCK, false
+}

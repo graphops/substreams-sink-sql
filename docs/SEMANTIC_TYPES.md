@@ -32,6 +32,74 @@ message EthereumTransaction {
 }
 ```
 
+## Storage Layout Configuration (RisingWave)
+
+RisingWave supports two storage engines for different workload patterns:
+
+- **Hummock** (default): Row-oriented storage optimized for streaming analytics and real-time queries
+- **Iceberg**: Columnar storage optimized for analytical workloads and batch processing
+
+You can specify the storage layout at the table level using the `storage_layout` option:
+
+```protobuf
+message EthereumBlocks {
+  option (sf.substreams.sink.sql.schema.v1.table) = {
+    name: "eth_blocks"
+    storage_layout: ICEBERG  // Use columnar storage for analytics
+  };
+  
+  string block_hash = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+    primary_key: true
+    semantic_type: "hash"
+  }];
+  
+  string block_number = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
+    semantic_type: "uint256"
+  }];
+}
+```
+
+### Generated SQL Examples
+
+**Hummock (Default):**
+```sql
+CREATE TABLE eth_blocks (
+  block_hash CHARACTER VARYING PRIMARY KEY,
+  block_number rw_uint256,
+  block_number INTEGER NOT NULL,
+  block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL
+);
+```
+
+**Iceberg (Columnar Storage):**
+```sql
+CREATE TABLE eth_blocks (
+  block_hash CHARACTER VARYING PRIMARY KEY,
+  block_number rw_uint256,
+  block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL
+) ENGINE = iceberg;
+```
+
+### Storage Layout Guidelines
+
+**Use Hummock (Default) when:**
+- Real-time streaming analytics with sub-second latency requirements
+- High-frequency point queries and transactional updates
+- Mixed read/write workloads with streaming data
+- Standard streaming use cases (recommended for most scenarios)
+
+**Use Iceberg when:**
+- Large-scale analytical queries requiring columnar performance
+- Performance comparison testing against ClickHouse-like systems
+- Long-term data retention with external tool compatibility
+- Batch loading workloads via direct INSERT statements
+- Interoperability with Spark, Trino, and other Iceberg-compatible engines
+
+**⚠️ Important Iceberg Considerations:**
+- Requires manual compaction for optimal performance with high-frequency INSERTs
+- Best suited for append-heavy workloads rather than frequent updates
+- Iceberg connection configuration required (warehouse path, catalog setup)
+
 ## Supported Semantic Types
 
 ### Blockchain/Crypto Types

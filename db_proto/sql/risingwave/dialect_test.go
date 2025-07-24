@@ -7,6 +7,7 @@ import (
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
+	pbschema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -789,5 +790,122 @@ func createMockFieldDescriptor(name string, fieldType descriptor.FieldDescriptor
 
 func stringPtr(s string) *string {
 	return &s
+}
+
+func TestDialectRisingwave_StorageLayout_Hummock(t *testing.T) {
+	logger := zap.NewNop()
+	
+	nameField := createMockFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
+	
+	// Create table with default (Hummock) storage layout
+	table := &schema.Table{
+		Name: "test_table",
+		PbTableInfo: &pbschema.Table{
+			Name: "test_table",
+			// No storage_layout specified, should default to Hummock
+		},
+		Columns: []*schema.Column{
+			{Name: "name", FieldDescriptor: nameField},
+		},
+	}
+	
+	tableRegistry := map[string]*schema.Table{"test_table": table}
+	d, err := NewDialectRisingwave("public", tableRegistry, logger)
+	require.NoError(t, err)
+	
+	sql := d.CreateTableSql["test_table"]
+	
+	// Should NOT contain any ENGINE clause for default Hummock storage
+	assert.NotContains(t, sql, "ENGINE = iceberg")
+	assert.NotContains(t, sql, "ENGINE = hummock")
+	
+	// Should NOT contain the old WITH connector syntax
+	assert.NotContains(t, sql, "WITH (")
+	assert.NotContains(t, sql, "connector = 'iceberg'")
+	
+	// Should be a standard CREATE TABLE statement
+	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.test_table")
+	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
+	assert.Contains(t, sql, "block_number INTEGER NOT NULL")
+	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
+}
+
+func TestDialectRisingwave_StorageLayout_Iceberg(t *testing.T) {
+	logger := zap.NewNop()
+	
+	nameField := createMockFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
+	
+	// Create table with explicit Iceberg storage layout
+	icebergLayout := pbschema.StorageLayout_ICEBERG
+	table := &schema.Table{
+		Name: "analytics_table",
+		PbTableInfo: &pbschema.Table{
+			Name: "analytics_table",
+			StorageLayout: &icebergLayout,
+		},
+		Columns: []*schema.Column{
+			{Name: "name", FieldDescriptor: nameField},
+		},
+	}
+	
+	tableRegistry := map[string]*schema.Table{"analytics_table": table}
+	d, err := NewDialectRisingwave("public", tableRegistry, logger)
+	require.NoError(t, err)
+	
+	sql := d.CreateTableSql["analytics_table"]
+	
+	// Should contain ENGINE = iceberg for RisingWave-managed Iceberg table
+	assert.Contains(t, sql, "ENGINE = iceberg")
+	
+	// Should NOT contain the old WITH connector syntax
+	assert.NotContains(t, sql, "WITH (")
+	assert.NotContains(t, sql, "connector = 'iceberg'")
+	assert.NotContains(t, sql, "catalog.type = 'storage'")
+	assert.NotContains(t, sql, "warehouse.path")
+	
+	// Should still be a valid CREATE TABLE statement with standard columns
+	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.analytics_table")
+	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
+	assert.Contains(t, sql, "block_number INTEGER NOT NULL")
+	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
+}
+
+func TestDialectRisingwave_StorageLayout_ExplicitHummock(t *testing.T) {
+	logger := zap.NewNop()
+	
+	nameField := createMockFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
+	
+	// Create table with explicit Hummock storage layout
+	hummockLayout := pbschema.StorageLayout_HUMMOCK
+	table := &schema.Table{
+		Name: "streaming_table",
+		PbTableInfo: &pbschema.Table{
+			Name: "streaming_table",
+			StorageLayout: &hummockLayout,
+		},
+		Columns: []*schema.Column{
+			{Name: "name", FieldDescriptor: nameField},
+		},
+	}
+	
+	tableRegistry := map[string]*schema.Table{"streaming_table": table}
+	d, err := NewDialectRisingwave("public", tableRegistry, logger)
+	require.NoError(t, err)
+	
+	sql := d.CreateTableSql["streaming_table"]
+	
+	// Should NOT contain ENGINE clause for Hummock (default storage)
+	assert.NotContains(t, sql, "ENGINE = iceberg")
+	assert.NotContains(t, sql, "ENGINE = hummock")
+	
+	// Should NOT contain the old WITH connector syntax
+	assert.NotContains(t, sql, "WITH (")
+	assert.NotContains(t, sql, "connector = 'iceberg'")
+	
+	// Should be a standard CREATE TABLE statement
+	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.streaming_table")
+	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
+	assert.Contains(t, sql, "block_number INTEGER NOT NULL")
+	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
 }
 

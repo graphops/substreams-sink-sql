@@ -138,10 +138,59 @@ func (Function) EnumDescriptor() ([]byte, []int) {
 	return file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDescGZIP(), []int{1}
 }
 
+// Storage layout options for RisingWave tables
+type StorageLayout int32
+
+const (
+	StorageLayout_HUMMOCK StorageLayout = 0 // Default: Row-oriented streaming storage engine
+	StorageLayout_ICEBERG StorageLayout = 1 // Columnar analytical storage with Iceberg integration
+)
+
+// Enum value maps for StorageLayout.
+var (
+	StorageLayout_name = map[int32]string{
+		0: "HUMMOCK",
+		1: "ICEBERG",
+	}
+	StorageLayout_value = map[string]int32{
+		"HUMMOCK": 0,
+		"ICEBERG": 1,
+	}
+)
+
+func (x StorageLayout) Enum() *StorageLayout {
+	p := new(StorageLayout)
+	*p = x
+	return p
+}
+
+func (x StorageLayout) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (StorageLayout) Descriptor() protoreflect.EnumDescriptor {
+	return file_sf_substreams_sink_sql_schema_v1_schema_proto_enumTypes[2].Descriptor()
+}
+
+func (StorageLayout) Type() protoreflect.EnumType {
+	return &file_sf_substreams_sink_sql_schema_v1_schema_proto_enumTypes[2]
+}
+
+func (x StorageLayout) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use StorageLayout.Descriptor instead.
+func (StorageLayout) EnumDescriptor() ([]byte, []int) {
+	return file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDescGZIP(), []int{2}
+}
+
 type Table struct {
-	state                  protoimpl.MessageState  `protogen:"open.v1"`
-	Name                   string                  `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	ChildOf                *string                 `protobuf:"bytes,2,opt,name=child_of,json=childOf,proto3,oneof" json:"child_of,omitempty"` //  repeated string primary_key_fields = 3;
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Name    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	ChildOf *string                `protobuf:"bytes,2,opt,name=child_of,json=childOf,proto3,oneof" json:"child_of,omitempty"`
+	// repeated string primary_key_fields = 3;
+	StorageLayout          *StorageLayout          `protobuf:"varint,4,opt,name=storage_layout,json=storageLayout,proto3,enum=sf.substreams.sink.sql.schema.v1.StorageLayout,oneof" json:"storage_layout,omitempty"` // RisingWave storage engine choice
 	ClickhouseTableOptions *ClickhouseTableOptions `protobuf:"bytes,200,opt,name=clickhouse_table_options,json=clickhouseTableOptions,proto3,oneof" json:"clickhouse_table_options,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
@@ -189,6 +238,13 @@ func (x *Table) GetChildOf() string {
 		return *x.ChildOf
 	}
 	return ""
+}
+
+func (x *Table) GetStorageLayout() StorageLayout {
+	if x != nil && x.StorageLayout != nil {
+		return *x.StorageLayout
+	}
+	return StorageLayout_HUMMOCK
 }
 
 func (x *Table) GetClickhouseTableOptions() *ClickhouseTableOptions {
@@ -618,12 +674,14 @@ var File_sf_substreams_sink_sql_schema_v1_schema_proto protoreflect.FileDescript
 
 const file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDesc = "" +
 	"\n" +
-	"-sf/substreams/sink/sql/schema/v1/schema.proto\x12 sf.substreams.sink.sql.schema.v1\x1a google/protobuf/descriptor.proto\"\xdf\x01\n" +
+	"-sf/substreams/sink/sql/schema/v1/schema.proto\x12 sf.substreams.sink.sql.schema.v1\x1a google/protobuf/descriptor.proto\"\xcf\x02\n" +
 	"\x05Table\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +
-	"\bchild_of\x18\x02 \x01(\tH\x00R\achildOf\x88\x01\x01\x12x\n" +
-	"\x18clickhouse_table_options\x18\xc8\x01 \x01(\v28.sf.substreams.sink.sql.schema.v1.ClickhouseTableOptionsH\x01R\x16clickhouseTableOptions\x88\x01\x01B\v\n" +
-	"\t_child_ofB\x1b\n" +
+	"\bchild_of\x18\x02 \x01(\tH\x00R\achildOf\x88\x01\x01\x12[\n" +
+	"\x0estorage_layout\x18\x04 \x01(\x0e2/.sf.substreams.sink.sql.schema.v1.StorageLayoutH\x01R\rstorageLayout\x88\x01\x01\x12x\n" +
+	"\x18clickhouse_table_options\x18\xc8\x01 \x01(\v28.sf.substreams.sink.sql.schema.v1.ClickhouseTableOptionsH\x02R\x16clickhouseTableOptions\x88\x01\x01B\v\n" +
+	"\t_child_ofB\x11\n" +
+	"\x0f_storage_layoutB\x1b\n" +
 	"\x19_clickhouse_table_options\"\x8b\x02\n" +
 	"\x06Column\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tH\x00R\x04name\x88\x01\x01\x12$\n" +
@@ -680,7 +738,10 @@ const file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDesc = "" +
 	"\atoMonth\x10\x04\x12\n" +
 	"\n" +
 	"\x06toDate\x10\x05\x12\x12\n" +
-	"\x0etoStartOfMonth\x10\x06:`\n" +
+	"\x0etoStartOfMonth\x10\x06*)\n" +
+	"\rStorageLayout\x12\v\n" +
+	"\aHUMMOCK\x10\x00\x12\v\n" +
+	"\aICEBERG\x10\x01:`\n" +
 	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18\x85\xdf\x04 \x01(\v2'.sf.substreams.sink.sql.schema.v1.TableR\x05table:_\n" +
 	"\x05field\x12\x1d.google.protobuf.FieldOptions\x18\x86\xdf\x04 \x01(\v2(.sf.substreams.sink.sql.schema.v1.ColumnR\x05fieldB\xac\x02\n" +
 	"$com.sf.substreams.sink.sql.schema.v1B\vSchemaProtoP\x01ZPgithub.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1\xa2\x02\x05SSSSS\xaa\x02 Sf.Substreams.Sink.Sql.Schema.V1\xca\x02 Sf\\Substreams\\Sink\\Sql\\Schema\\V1\xe2\x02,Sf\\Substreams\\Sink\\Sql\\Schema\\V1\\GPBMetadata\xea\x02%Sf::Substreams::Sink::Sql::Schema::V1b\x06proto3"
@@ -697,40 +758,42 @@ func file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDescGZIP() []byte {
 	return file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDescData
 }
 
-var file_sf_substreams_sink_sql_schema_v1_schema_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_sf_substreams_sink_sql_schema_v1_schema_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_sf_substreams_sink_sql_schema_v1_schema_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_sf_substreams_sink_sql_schema_v1_schema_proto_goTypes = []any{
 	(IndexType)(0),                      // 0: sf.substreams.sink.sql.schema.v1.IndexType
 	(Function)(0),                       // 1: sf.substreams.sink.sql.schema.v1.Function
-	(*Table)(nil),                       // 2: sf.substreams.sink.sql.schema.v1.Table
-	(*Column)(nil),                      // 3: sf.substreams.sink.sql.schema.v1.Column
-	(*ClickhouseTableOptions)(nil),      // 4: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions
-	(*ClickhousePartitionByField)(nil),  // 5: sf.substreams.sink.sql.schema.v1.ClickhousePartitionByField
-	(*ClickhouseOrderByField)(nil),      // 6: sf.substreams.sink.sql.schema.v1.ClickhouseOrderByField
-	(*ClickhouseReplacingField)(nil),    // 7: sf.substreams.sink.sql.schema.v1.ClickhouseReplacingField
-	(*ClickhouseIndexField)(nil),        // 8: sf.substreams.sink.sql.schema.v1.ClickhouseIndexField
-	(*descriptorpb.MessageOptions)(nil), // 9: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 10: google.protobuf.FieldOptions
+	(StorageLayout)(0),                  // 2: sf.substreams.sink.sql.schema.v1.StorageLayout
+	(*Table)(nil),                       // 3: sf.substreams.sink.sql.schema.v1.Table
+	(*Column)(nil),                      // 4: sf.substreams.sink.sql.schema.v1.Column
+	(*ClickhouseTableOptions)(nil),      // 5: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions
+	(*ClickhousePartitionByField)(nil),  // 6: sf.substreams.sink.sql.schema.v1.ClickhousePartitionByField
+	(*ClickhouseOrderByField)(nil),      // 7: sf.substreams.sink.sql.schema.v1.ClickhouseOrderByField
+	(*ClickhouseReplacingField)(nil),    // 8: sf.substreams.sink.sql.schema.v1.ClickhouseReplacingField
+	(*ClickhouseIndexField)(nil),        // 9: sf.substreams.sink.sql.schema.v1.ClickhouseIndexField
+	(*descriptorpb.MessageOptions)(nil), // 10: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 11: google.protobuf.FieldOptions
 }
 var file_sf_substreams_sink_sql_schema_v1_schema_proto_depIdxs = []int32{
-	4,  // 0: sf.substreams.sink.sql.schema.v1.Table.clickhouse_table_options:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions
-	6,  // 1: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.order_by_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseOrderByField
-	5,  // 2: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.partition_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhousePartitionByField
-	7,  // 3: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.replacing_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseReplacingField
-	8,  // 4: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.index_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseIndexField
-	1,  // 5: sf.substreams.sink.sql.schema.v1.ClickhousePartitionByField.function:type_name -> sf.substreams.sink.sql.schema.v1.Function
-	1,  // 6: sf.substreams.sink.sql.schema.v1.ClickhouseOrderByField.function:type_name -> sf.substreams.sink.sql.schema.v1.Function
-	0,  // 7: sf.substreams.sink.sql.schema.v1.ClickhouseIndexField.type:type_name -> sf.substreams.sink.sql.schema.v1.IndexType
-	1,  // 8: sf.substreams.sink.sql.schema.v1.ClickhouseIndexField.function:type_name -> sf.substreams.sink.sql.schema.v1.Function
-	9,  // 9: sf.substreams.sink.sql.schema.v1.table:extendee -> google.protobuf.MessageOptions
-	10, // 10: sf.substreams.sink.sql.schema.v1.field:extendee -> google.protobuf.FieldOptions
-	2,  // 11: sf.substreams.sink.sql.schema.v1.table:type_name -> sf.substreams.sink.sql.schema.v1.Table
-	3,  // 12: sf.substreams.sink.sql.schema.v1.field:type_name -> sf.substreams.sink.sql.schema.v1.Column
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	11, // [11:13] is the sub-list for extension type_name
-	9,  // [9:11] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	2,  // 0: sf.substreams.sink.sql.schema.v1.Table.storage_layout:type_name -> sf.substreams.sink.sql.schema.v1.StorageLayout
+	5,  // 1: sf.substreams.sink.sql.schema.v1.Table.clickhouse_table_options:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions
+	7,  // 2: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.order_by_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseOrderByField
+	6,  // 3: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.partition_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhousePartitionByField
+	8,  // 4: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.replacing_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseReplacingField
+	9,  // 5: sf.substreams.sink.sql.schema.v1.ClickhouseTableOptions.index_fields:type_name -> sf.substreams.sink.sql.schema.v1.ClickhouseIndexField
+	1,  // 6: sf.substreams.sink.sql.schema.v1.ClickhousePartitionByField.function:type_name -> sf.substreams.sink.sql.schema.v1.Function
+	1,  // 7: sf.substreams.sink.sql.schema.v1.ClickhouseOrderByField.function:type_name -> sf.substreams.sink.sql.schema.v1.Function
+	0,  // 8: sf.substreams.sink.sql.schema.v1.ClickhouseIndexField.type:type_name -> sf.substreams.sink.sql.schema.v1.IndexType
+	1,  // 9: sf.substreams.sink.sql.schema.v1.ClickhouseIndexField.function:type_name -> sf.substreams.sink.sql.schema.v1.Function
+	10, // 10: sf.substreams.sink.sql.schema.v1.table:extendee -> google.protobuf.MessageOptions
+	11, // 11: sf.substreams.sink.sql.schema.v1.field:extendee -> google.protobuf.FieldOptions
+	3,  // 12: sf.substreams.sink.sql.schema.v1.table:type_name -> sf.substreams.sink.sql.schema.v1.Table
+	4,  // 13: sf.substreams.sink.sql.schema.v1.field:type_name -> sf.substreams.sink.sql.schema.v1.Column
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	12, // [12:14] is the sub-list for extension type_name
+	10, // [10:12] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_sf_substreams_sink_sql_schema_v1_schema_proto_init() }
@@ -745,7 +808,7 @@ func file_sf_substreams_sink_sql_schema_v1_schema_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDesc), len(file_sf_substreams_sink_sql_schema_v1_schema_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   7,
 			NumExtensions: 2,
 			NumServices:   0,
