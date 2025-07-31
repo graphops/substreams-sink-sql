@@ -38,8 +38,11 @@ var fromProtoCmd = Command(fromProtoE,
 		flags.Bool("no-constraints", false, "Do not add any constraints to the database. This is useful to speed up the initial import of a large dataset.")
 		//flags.Bool("no-proto-option", false, "this tell the schema manager to not rely on proto option to generate the schema.")
 		//flags.Bool("no-transactions", false, "Do not use transactions when inserting data. This is useful to speed up the initial import of a large dataset.")
-		//flags.Bool("parallel", false, "Run the sinker in parallel mode. This is useful to speed up the initial import of a large dataset. This is will process blocks of a batch in parallel")
+		flags.Bool("parallel", false, "Run the sinker in parallel mode. This is useful to speed up the initial import of a large dataset. This will process blocks of a batch in parallel")
+		flags.Int("parallel-workers", 4, "number of parallel workers for batch processing (only used when --parallel is enabled)")
 		flags.Int("block-batch-size", 25, "number of blocks to process at a time")
+		flags.Int("csv-flush-threshold", 1000, "number of rows to accumulate in CSV buffer before flushing (parallel mode only)")
+		flags.Bool("adaptive-batching", true, "enable adaptive batch sizing based on ingestion performance (parallel mode only)")
 		flags.String("clickhouse-sink-info-folder", "", "folder where to store the clickhouse sink info")
 		flags.String("clickhouse-cursor-file-path", "cursor.txt", "file name where to store the clickhouse cursor")
 	}),
@@ -69,15 +72,26 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 	useConstraints := !sflags.MustGetBool(cmd, "no-constraints")
 	//useTransactions := !sflags.MustGetBool(cmd, "no-transactions")
 	blockBatchSize := sflags.MustGetInt(cmd, "block-batch-size")
+	parallelWorkers := sflags.MustGetInt(cmd, "parallel-workers")
+	csvFlushThreshold := sflags.MustGetInt(cmd, "csv-flush-threshold")
+	adaptiveBatching := sflags.MustGetBool(cmd, "adaptive-batching")
 
 	useTransactions := true
-	parallel := false
+	parallel := sflags.MustGetBool(cmd, "parallel")
 
-	//parallel := sflags.MustGetBool(cmd, "parallel")
-	//if parallel {
-	//	useConstraints = false
-	//	useTransactions = false
-	//}
+	// For parallel mode, disable constraints and transactions for better performance
+	if parallel {
+		useConstraints = false
+		useTransactions = false
+		zlog.Info("parallel mode enabled",
+			zap.Int("workers", parallelWorkers),
+			zap.Int("batch_size", blockBatchSize),
+			zap.Int("csv_flush_threshold", csvFlushThreshold),
+			zap.Bool("adaptive_batching", adaptiveBatching),
+			zap.Bool("use_constraints", useConstraints),
+			zap.Bool("use_transactions", useTransactions),
+		)
+	}
 
 	endpoint := sflags.MustGetString(cmd, "substreams-endpoint")
 	if endpoint == "" {
@@ -206,7 +220,11 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		}
 
 	case "risingwave":
-		database, err = risingwave.NewDatabase(schema, dsn, outputModuleName, rootMessageDescriptor, useProtoOption, useConstraints, zlog)
+		if parallel {
+			database, err = risingwave.NewDatabaseWithParallel(schema, dsn, outputModuleName, rootMessageDescriptor, useProtoOption, useConstraints, parallel, parallelWorkers, csvFlushThreshold, zlog)
+		} else {
+			database, err = risingwave.NewDatabase(schema, dsn, outputModuleName, rootMessageDescriptor, useProtoOption, useConstraints, zlog)
+		}
 		if err != nil {
 			return fmt.Errorf("creating risingwave database: %w", err)
 		}
@@ -315,7 +333,7 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 	}
 
 	stats := stats2.NewStats(zlog)
-	sinker := db_proto.NewSinker(rootMessageDescriptor, baseSink, database, useTransactions, useConstraints, blockBatchSize, parallel, stats, zlog)
+	sinker := db_proto.NewSinker(rootMessageDescriptor, baseSink, database, useTransactions, useConstraints, blockBatchSize, parallel, parallelWorkers, stats, zlog)
 
 	err = sinker.Run(cmd.Context())
 	if err != nil {

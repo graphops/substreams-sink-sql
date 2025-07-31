@@ -69,7 +69,7 @@ func MapSemanticType(semanticType sql2.SemanticType) (string, bool) {
 	case sql2.SemanticUint256:
 		return string(TypeRwUint256), true // Use new rw_uint256 for unsigned
 	case sql2.SemanticInt256:
-		return string(TypeRwInt256), true  // Keep rw_int256 for signed
+		return string(TypeRwInt256), true // Keep rw_int256 for signed
 	case sql2.SemanticAddress:
 		return "CHARACTER VARYING", true
 	case sql2.SemanticHash:
@@ -330,7 +330,6 @@ func convertToHexString(value interface{}) (string, error) {
 	}
 }
 
-
 // convertToJSON converts values to JSONB format
 func convertToJSON(value interface{}) (string, error) {
 	switch v := value.(type) {
@@ -359,7 +358,7 @@ func convertToUUID(value interface{}) (string, error) {
 // convertUnixTimestamp converts unix timestamps to RisingWave timestamp format
 func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error) {
 	var t time.Time
-	
+
 	switch v := value.(type) {
 	case int64:
 		if isMilliseconds {
@@ -387,6 +386,6 @@ func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error
 	default:
 		return "", fmt.Errorf("cannot convert %T to timestamp", value)
 	}
-	
+
 	return "'" + t.UTC().Format(time.RFC3339) + "'", nil
 }

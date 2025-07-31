@@ -57,15 +57,15 @@ func SemanticTypeInfo(d *desc.FieldDescriptor) (semanticType string, formatHint 
 	if fieldInfo == nil {
 		return "", "", false
 	}
-	
+
 	if fieldInfo.SemanticType != nil {
 		semanticType = fieldInfo.GetSemanticType()
 		hasSemanticType = true
 	}
-	
+
 	if fieldInfo.FormatHint != nil {
 		formatHint = fieldInfo.GetFormatHint()
 	}
-	
+
 	return semanticType, formatHint, hasSemanticType
 }

@@ -87,7 +87,7 @@ func createInsertFromDescriptor(table *schema.Table, dialect sql2.Dialect) (stri
 	fieldCount++
 	fieldNames = append(fieldNames, "block_number")
 	placeholders = append(placeholders, fmt.Sprintf("$%d", fieldCount))
-	
+
 	// Add block_timestamp
 	fieldCount++
 	fieldNames = append(fieldNames, "block_timestamp")
@@ -153,5 +153,3 @@ func (i *RowInserter) insert(table string, values []any, database *Database) err
 func (i *RowInserter) flush(database *Database) error {
 	return nil
 }
-
-

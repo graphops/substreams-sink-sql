@@ -155,8 +155,8 @@ func (l *Loader) BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error) {
 	}
 
 	// RisingWave-specific behavior: RisingWave does not support read-write transactions
-	// According to RisingWave docs: "The BEGIN command starts the read-write transaction mode, 
-	// which is not supported yet in RisingWave. For compatibility reasons, this command will 
+	// According to RisingWave docs: "The BEGIN command starts the read-write transaction mode,
+	// which is not supported yet in RisingWave. For compatibility reasons, this command will
 	// still succeed but no transaction is actually started."
 	// Therefore, we use autocommit mode for all operations.
 	if l.dsn.Driver() == "risingwave" {

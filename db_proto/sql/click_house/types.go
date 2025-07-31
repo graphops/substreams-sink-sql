@@ -41,13 +41,13 @@ const (
 	TypeVarchar    DataType = "VARCHAR"
 	TypeDateTime   DataType = "DateTime"
 	TypeDateTime64 DataType = "DateTime64"
-	
+
 	// ClickHouse semantic type mappings
-	TypeFixedString    DataType = "FixedString"
-	TypeDecimal32      DataType = "Decimal32"
-	TypeDecimal64      DataType = "Decimal64"
-	TypeDecimal128     DataType = "Decimal128"
-	TypeDecimal256     DataType = "Decimal256"
+	TypeFixedString DataType = "FixedString"
+	TypeDecimal32   DataType = "Decimal32"
+	TypeDecimal64   DataType = "Decimal64"
+	TypeDecimal128  DataType = "Decimal128"
+	TypeDecimal256  DataType = "Decimal256"
 )
 
 func (s DataType) String() string {
@@ -363,7 +363,7 @@ func convertToDecimal(value interface{}) (string, error) {
 // convertUnixTimestamp converts unix timestamps to ClickHouse timestamp format
 func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error) {
 	var t time.Time
-	
+
 	switch v := value.(type) {
 	case int64:
 		if isMilliseconds {
@@ -391,7 +391,7 @@ func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error
 	default:
 		return "", fmt.Errorf("cannot convert %T to timestamp", value)
 	}
-	
+
 	if isMilliseconds {
 		// ClickHouse DateTime64 format with milliseconds
 		return "'" + t.UTC().Format("2006-01-02 15:04:05.000") + "'", nil

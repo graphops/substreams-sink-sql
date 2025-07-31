@@ -333,7 +333,7 @@ func convertToUUID(value interface{}) (string, error) {
 // convertUnixTimestamp converts unix timestamps to PostgreSQL timestamp format
 func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error) {
 	var t time.Time
-	
+
 	switch v := value.(type) {
 	case int64:
 		if isMilliseconds {
@@ -361,6 +361,6 @@ func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error
 	default:
 		return "", fmt.Errorf("cannot convert %T to timestamp", value)
 	}
-	
+
 	return "'" + t.UTC().Format(time.RFC3339) + "'", nil
 }

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	_ "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/logging"
@@ -1031,11 +1031,11 @@ func setupRisingwaveContainer(t *testing.T, testTables map[string]*db2.TableInfo
 
 	risingwaveContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: "risingwavelabs/risingwave:latest",
+			Image:        "risingwavelabs/risingwave:latest",
 			ExposedPorts: []string{"4566/tcp", "5691/tcp"},
-			Cmd: []string{"playground"},
+			Cmd:          []string{"playground"},
 			WaitingFor: wait.ForListeningPort("4566/tcp").
-				WithStartupTimeout(90*time.Second),
+				WithStartupTimeout(90 * time.Second),
 		},
 		Started: true,
 	})
@@ -1044,11 +1044,11 @@ func setupRisingwaveContainer(t *testing.T, testTables map[string]*db2.TableInfo
 
 	host, err := risingwaveContainer.Host(ctx)
 	require.NoError(t, err)
-	
+
 	port, err := risingwaveContainer.MappedPort(ctx, "4566")
 	require.NoError(t, err)
 
-	dbConnectionString = fmt.Sprintf("risingwave://%s:%s@%s:%s/%s?sslmode=disable", 
+	dbConnectionString = fmt.Sprintf("risingwave://%s:%s@%s:%s/%s?sslmode=disable",
 		dbUser, dbPassword, host, port.Port(), dbName)
 
 	l := db2.NewTestLoader(

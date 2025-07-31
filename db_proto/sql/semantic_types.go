@@ -15,7 +15,6 @@ const (
 	SemanticSignature SemanticType = "signature" // Cryptographic signature
 	SemanticPubkey    SemanticType = "pubkey"    // Public key
 
-
 	// Text/Binary types
 	SemanticHex    SemanticType = "hex"    // Hexadecimal string
 	SemanticBase64 SemanticType = "base64" // Base64 encoded data
@@ -137,10 +136,10 @@ func GetSemanticTypeInfo(semanticType string) (SemanticTypeInfo, error) {
 type SemanticTypeMapper interface {
 	// MapSemanticType maps a semantic type to dialect-specific SQL type
 	MapSemanticType(semanticType SemanticType) (sqlType string, supported bool)
-	
+
 	// ConvertValue converts a value according to semantic type and format hint
 	ConvertValue(semanticType SemanticType, value interface{}, formatHint string) (string, error)
-	
+
 	// SupportsSemanticType returns true if the dialect supports the semantic type
 	SupportsSemanticType(semanticType SemanticType) bool
 }

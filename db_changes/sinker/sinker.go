@@ -29,7 +29,7 @@ type SQLSinker struct {
 
 	stats               *Stats
 	lastAppliedBlockNum *uint64
-	
+
 	flushRetryCount int
 	flushRetryDelay time.Duration
 }
@@ -102,12 +102,12 @@ func (s *SQLSinker) flushWithRetry(ctx context.Context, moduleHash string, curso
 	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
 			delay := time.Duration(attempt) * s.flushRetryDelay
-			s.logger.Warn("retrying flush after error", 
-				zap.Int("attempt", attempt), 
+			s.logger.Warn("retrying flush after error",
+				zap.Int("attempt", attempt),
 				zap.Int("max_retries", retries),
 				zap.Duration("delay", delay),
 				zap.Error(lastErr))
-			
+
 			select {
 			case <-ctx.Done():
 				return 0, ctx.Err()
@@ -124,7 +124,7 @@ func (s *SQLSinker) flushWithRetry(ctx context.Context, moduleHash string, curso
 		}
 		lastErr = err
 	}
-	
+
 	return 0, fmt.Errorf("flush failed after %d retries: %w", retries, lastErr)
 }
 

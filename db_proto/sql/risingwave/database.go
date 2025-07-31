@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"time"
 
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	sink "github.com/streamingfast/substreams-sink"
@@ -33,14 +34,28 @@ type Database struct {
 	inserter       pgInserter
 	flusher        pgFlusher
 	useConstraints bool
+
+	// Connection pooling for parallel processing
+	poolManager       *ConnectionPoolManager
+	parallelMode      bool
+	csvFlushThreshold int
 }
 
 func NewDatabase(schema *schema.Schema, dsn *db.DSN, moduleOutputType string, rootMessageDescriptor *desc.MessageDescriptor, useProtoOptions bool, useConstraints bool, logger *zap.Logger) (*Database, error) {
+	return NewDatabaseWithParallel(schema, dsn, moduleOutputType, rootMessageDescriptor, useProtoOptions, useConstraints, false, 0, 1000, logger)
+}
+
+func NewDatabaseWithParallel(schema *schema.Schema, dsn *db.DSN, moduleOutputType string, rootMessageDescriptor *desc.MessageDescriptor, useProtoOptions bool, useConstraints bool, parallelMode bool, parallelWorkers int, csvFlushThreshold int, logger *zap.Logger) (*Database, error) {
 	logger = logger.Named("risingwave")
 
 	connectionString := dsn.ConnString()
-	logger.Info("connecting to db", zap.String("dsn", connectionString))
+	logger.Info("connecting to db",
+		zap.String("dsn", connectionString),
+		zap.Bool("parallel_mode", parallelMode),
+		zap.Int("parallel_workers", parallelWorkers),
+	)
 	logger.Info("RisingWave operates in autocommit mode - no transaction semantics available")
+
 	sqlDB, err := pqsql.Open(dsn.SqlDriver(), connectionString)
 	if err != nil {
 		return nil, fmt.Errorf("open db connection: %w", err)
@@ -59,20 +74,44 @@ func NewDatabase(schema *schema.Schema, dsn *db.DSN, moduleOutputType string, ro
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base database: %w", err)
 	}
+
+	var poolManager *ConnectionPoolManager
+	if parallelMode && parallelWorkers > 0 {
+		poolManager, err = NewConnectionPoolManager(context.Background(), dsn, parallelWorkers, logger)
+		if err != nil {
+			return nil, fmt.Errorf("creating connection pool manager: %w", err)
+		}
+	}
+
 	database := &Database{
-		db:             sqlDB,
-		schema:         schema,
-		useConstraints: useConstraints,
-		BaseDatabase:   baseDB,
-		dialect:        dialect,
-		logger:         logger,
+		db:                sqlDB,
+		schema:            schema,
+		useConstraints:    useConstraints,
+		BaseDatabase:      baseDB,
+		dialect:           dialect,
+		logger:            logger,
+		poolManager:       poolManager,
+		parallelMode:      parallelMode,
+		csvFlushThreshold: csvFlushThreshold,
 	}
 
 	return database, nil
 }
 
 func (d *Database) Open() error {
-	if d.useConstraints {
+	// Initialize the appropriate inserter based on mode and constraints
+	if d.parallelMode && d.poolManager != nil {
+		// Use parallel inserter for RisingWave parallel processing
+		inserter, err := NewParallelInserter(d.logger)
+		if err != nil {
+			return fmt.Errorf("creating parallel inserter: %w", err)
+		}
+		if err := inserter.init(d); err != nil {
+			return fmt.Errorf("initializing parallel inserter: %w", err)
+		}
+		d.inserter = inserter
+		d.flusher = inserter
+	} else if d.useConstraints {
 		inserter, err := NewRowInserter(d.logger)
 		if err != nil {
 			return fmt.Errorf("creating row inserter: %w", err)
@@ -164,7 +203,7 @@ func (d *Database) BeginTransaction() (err error) {
 	// RisingWave does not support read-write transactions. According to RisingWave docs:
 	// "The BEGIN command starts the read-write transaction mode, which is not supported yet in RisingWave.
 	// For compatibility reasons, this command will still succeed but no transaction is actually started."
-	// 
+	//
 	// Since no actual transaction is started, we operate in autocommit mode and set tx to nil
 	// to ensure all subsequent operations use the database connection directly.
 	d.logger.Debug("RisingWave: skipping transaction begin, using autocommit mode")
@@ -176,7 +215,7 @@ func (d *Database) CommitTransaction() (err error) {
 	// RisingWave operates in autocommit mode since read-write transactions are not supported.
 	// All changes are automatically committed when executed.
 	d.logger.Debug("RisingWave: commit is no-op in autocommit mode")
-	
+
 	// Defensive check: if somehow a transaction was started (shouldn't happen), commit it
 	if d.tx != nil {
 		d.logger.Warn("RisingWave: unexpected transaction found during commit, attempting to commit")
@@ -194,7 +233,7 @@ func (d *Database) RollbackTransaction() {
 	// In streaming databases, data modifications are typically append-only.
 	// ROLLBACK documentation was not found for RisingWave, suggesting it may not be supported.
 	d.logger.Debug("RisingWave: rollback is no-op in autocommit mode")
-	
+
 	// Defensive check: if somehow a transaction was started (shouldn't happen), attempt rollback
 	if d.tx != nil {
 		d.logger.Warn("RisingWave: unexpected transaction found during rollback, attempting to rollback")
@@ -324,7 +363,7 @@ func (d *Database) StoreCursor(cursor *sink.Cursor) error {
 func (d *Database) HandleBlocksUndo(lastValidBlockNum uint64) (err error) {
 	// RisingWave operates in autocommit mode - execute operations directly without transactions
 	d.logger.Info("undoing blocks", zap.Uint64("last_valid_block_num", lastValidBlockNum))
-	
+
 	query := fmt.Sprintf(`DELETE FROM %s._blocks_ WHERE "number" > $1`, d.schema.Name)
 	result, err := d.execSql(query, lastValidBlockNum)
 	if err != nil {
@@ -341,8 +380,44 @@ func (d *Database) HandleBlocksUndo(lastValidBlockNum uint64) (err error) {
 
 func (d *Database) Clone() sql.Database {
 	base := d.BaseClone()
-	d.BaseDatabase = base
-	return d
+
+	// For parallel mode, create a new database instance that uses the same pool manager
+	// but can operate independently
+	cloned := &Database{
+		BaseDatabase:      base,
+		db:                d.db, // Share the original connection for non-parallel operations
+		tx:                nil,  // Always nil for RisingWave
+		schema:            d.schema,
+		logger:            d.logger,
+		dialect:           d.dialect,
+		useConstraints:    d.useConstraints,
+		poolManager:       d.poolManager, // Share the pool manager
+		parallelMode:      d.parallelMode,
+		csvFlushThreshold: d.csvFlushThreshold, // Preserve flush threshold setting
+	}
+
+	// Share the same inserter instance to avoid redundant initialization
+	// The inserters are designed to be thread-safe for parallel operations
+	cloned.inserter = d.inserter
+	cloned.flusher = d.flusher
+
+	return cloned
+}
+
+// GetConnectionPool returns a connection pool for parallel processing
+func (d *Database) GetConnectionPool() *pgxpool.Pool {
+	if d.poolManager != nil {
+		return d.poolManager.GetPool()
+	}
+	return nil
+}
+
+// GetConnectionPoolByIndex returns a specific connection pool by worker index
+func (d *Database) GetConnectionPoolByIndex(workerIndex int) *pgxpool.Pool {
+	if d.poolManager != nil {
+		return d.poolManager.GetPoolByIndex(workerIndex)
+	}
+	return nil
 }
 
 func (d *Database) DatabaseHash(schemaName string) (uint64, error) {

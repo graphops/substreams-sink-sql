@@ -13,7 +13,6 @@ import (
 	"github.com/streamingfast/substreams-sink-sql/db_proto/stats"
 	pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
 	"go.uber.org/zap"
-	"google.golang.org/appengine"
 )
 
 type Sinker struct {
@@ -21,6 +20,7 @@ type Sinker struct {
 	db                    sql.Database
 	useTransaction        bool
 	parallel              bool
+	parallelWorkers       int
 	blockBatchSize        uint64
 	stats                 *stats.Stats
 	logger                *zap.Logger
@@ -29,12 +29,13 @@ type Sinker struct {
 	flushLock             sync.Mutex
 }
 
-func NewSinker(rootMessageDescriptor *desc.MessageDescriptor, sink *sink.Sinker, db sql.Database, useTransaction bool, useConstraints bool, blockBatchSize int, parallel bool, stats *stats.Stats, logger *zap.Logger) *Sinker {
+func NewSinker(rootMessageDescriptor *desc.MessageDescriptor, sink *sink.Sinker, db sql.Database, useTransaction bool, useConstraints bool, blockBatchSize int, parallel bool, parallelWorkers int, stats *stats.Stats, logger *zap.Logger) *Sinker {
 	return &Sinker{
 		db:                    db,
 		rootMessageDescriptor: rootMessageDescriptor,
 		useTransaction:        useTransaction,
 		parallel:              parallel,
+		parallelWorkers:       parallelWorkers,
 		blockBatchSize:        uint64(blockBatchSize),
 		stats:                 stats,
 		Sinker:                sink,
@@ -108,35 +109,11 @@ func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrp
 				return fmt.Errorf("begin tx: %w", err)
 			}
 		}
-		errs := appengine.MultiError{}
 		if s.parallel {
-			wg := sync.WaitGroup{}
-			wg.Add(len(holding))
-
-			for _, h := range holding {
-				go func() {
-					db := s.db.Clone()
-					err := db.BeginTransaction()
-					if err != nil {
-						errs = append(errs, err)
-					}
-
-					err = s.processHolder(h, s.stats)
-					if err != nil {
-						db.RollbackTransaction()
-						errs = append(errs, err)
-						//return fmt.Errorf("process holder: %w", err)
-					}
-					err = db.CommitTransaction()
-					if err != nil {
-						errs = append(errs, err)
-					}
-					wg.Done()
-				}()
-			}
-			wg.Wait()
-			if len(errs) > 0 {
-				return fmt.Errorf("errors: %w", errs)
+			// Use worker pool pattern for better resource management
+			err := s.processHoldersInParallel(holding, s.stats)
+			if err != nil {
+				return fmt.Errorf("parallel processing failed: %w", err)
 			}
 
 		} else {
@@ -227,6 +204,111 @@ func (s *Sinker) HandleBlockUndoSignal(ctx context.Context, undoSignal *pbsubstr
 	err = s.db.StoreCursor(cursor)
 	if err != nil {
 		return fmt.Errorf("inserting cursor: %w", err)
+	}
+
+	return nil
+}
+
+// processHoldersInParallel processes multiple holders using a worker pool pattern
+func (s *Sinker) processHoldersInParallel(holding []*Holder, stats *stats.Stats) error {
+	if len(holding) == 0 {
+		return nil
+	}
+
+	// Create worker pool with limited number of workers
+	workerCount := s.parallelWorkers
+	if workerCount <= 0 {
+		workerCount = 4 // Default fallback
+	}
+
+	// Limit worker count to number of holders to avoid unnecessary goroutines
+	if workerCount > len(holding) {
+		workerCount = len(holding)
+	}
+
+	s.logger.Debug("starting parallel processing",
+		zap.Int("holder_count", len(holding)),
+		zap.Int("worker_count", workerCount),
+	)
+
+	// Create channels for work distribution
+	holderChan := make(chan *Holder, len(holding))
+	errorChan := make(chan error, len(holding))
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+
+			// Clone database for this worker
+			db := s.db.Clone()
+
+			// Process holders assigned to this worker
+			for holder := range holderChan {
+				err := s.processWorkerHolder(db, holder, stats, workerID)
+				if err != nil {
+					s.logger.Error("worker processing failed",
+						zap.Int("worker_id", workerID),
+						zap.Error(err),
+					)
+					errorChan <- err
+				}
+			}
+		}(i)
+	}
+
+	// Distribute work to workers
+	startTime := time.Now()
+	for _, holder := range holding {
+		holderChan <- holder
+	}
+	close(holderChan)
+
+	// Wait for all workers to complete
+	wg.Wait()
+	close(errorChan)
+
+	duration := time.Since(startTime)
+	s.logger.Debug("parallel processing completed",
+		zap.Duration("duration", duration),
+		zap.Float64("holders_per_second", float64(len(holding))/duration.Seconds()),
+	)
+
+	// Collect errors
+	var errors []error
+	for err := range errorChan {
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("parallel processing errors (%d/%d failed): %v",
+			len(errors), len(holding), errors)
+	}
+
+	return nil
+}
+
+// processWorkerHolder processes a single holder in a worker context
+func (s *Sinker) processWorkerHolder(db sql.Database, holder *Holder, stats *stats.Stats, workerID int) error {
+	// Begin transaction if supported (RisingWave will ignore this)
+	err := db.BeginTransaction()
+	if err != nil {
+		return fmt.Errorf("worker %d begin transaction: %w", workerID, err)
+	}
+
+	// Process the holder
+	err = s.processHolder(holder, stats)
+	if err != nil {
+		db.RollbackTransaction() // RisingWave will ignore this
+		return fmt.Errorf("worker %d process holder: %w", workerID, err)
+	}
+
+	// Commit transaction if supported (RisingWave will ignore this)
+	err = db.CommitTransaction()
+	if err != nil {
+		return fmt.Errorf("worker %d commit transaction: %w", workerID, err)
 	}
 
 	return nil
