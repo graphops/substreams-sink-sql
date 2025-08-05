@@ -164,7 +164,7 @@ func (d *Database) BeginTransaction() (err error) {
 	// RisingWave does not support read-write transactions. According to RisingWave docs:
 	// "The BEGIN command starts the read-write transaction mode, which is not supported yet in RisingWave.
 	// For compatibility reasons, this command will still succeed but no transaction is actually started."
-	// 
+	//
 	// Since no actual transaction is started, we operate in autocommit mode and set tx to nil
 	// to ensure all subsequent operations use the database connection directly.
 	d.logger.Debug("RisingWave: skipping transaction begin, using autocommit mode")
@@ -176,7 +176,7 @@ func (d *Database) CommitTransaction() (err error) {
 	// RisingWave operates in autocommit mode since read-write transactions are not supported.
 	// All changes are automatically committed when executed.
 	d.logger.Debug("RisingWave: commit is no-op in autocommit mode")
-	
+
 	// Defensive check: if somehow a transaction was started (shouldn't happen), commit it
 	if d.tx != nil {
 		d.logger.Warn("RisingWave: unexpected transaction found during commit, attempting to commit")
@@ -194,7 +194,7 @@ func (d *Database) RollbackTransaction() {
 	// In streaming databases, data modifications are typically append-only.
 	// ROLLBACK documentation was not found for RisingWave, suggesting it may not be supported.
 	d.logger.Debug("RisingWave: rollback is no-op in autocommit mode")
-	
+
 	// Defensive check: if somehow a transaction was started (shouldn't happen), attempt rollback
 	if d.tx != nil {
 		d.logger.Warn("RisingWave: unexpected transaction found during rollback, attempting to rollback")
@@ -324,7 +324,7 @@ func (d *Database) StoreCursor(cursor *sink.Cursor) error {
 func (d *Database) HandleBlocksUndo(lastValidBlockNum uint64) (err error) {
 	// RisingWave operates in autocommit mode - execute operations directly without transactions
 	d.logger.Info("undoing blocks", zap.Uint64("last_valid_block_num", lastValidBlockNum))
-	
+
 	query := fmt.Sprintf(`DELETE FROM %s._blocks_ WHERE "number" > $1`, d.schema.Name)
 	result, err := d.execSql(query, lastValidBlockNum)
 	if err != nil {

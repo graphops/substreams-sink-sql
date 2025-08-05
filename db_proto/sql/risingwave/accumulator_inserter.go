@@ -66,7 +66,7 @@ func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (s
 	fields := table.Columns
 
 	var fieldNames []string
-	
+
 	// Add standard block metadata columns
 	fieldNames = append(fieldNames, "block_number")
 	fieldNames = append(fieldNames, "block_timestamp")

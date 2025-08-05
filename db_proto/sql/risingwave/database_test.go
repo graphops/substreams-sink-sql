@@ -19,7 +19,7 @@ func TestTableName(t *testing.T) {
 		{"my_schema", "_blocks_", "my_schema._blocks_"},
 		{"", "table", ".table"}, // Edge case: empty schema
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.expected, func(t *testing.T) {
 			result := tableName(test.schema, test.table)
@@ -44,7 +44,7 @@ func TestValueConversion(t *testing.T) {
 		{"time", time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), "'2023-01-01T00:00:00Z'"},
 		{"bytes", []byte{0xDE, 0xAD}, "'\\xDEAD'"},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result := ValueToString(test.input)

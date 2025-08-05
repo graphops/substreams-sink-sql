@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
+	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -105,10 +105,10 @@ func TestDataTypeString(t *testing.T) {
 
 func TestMapSemanticType(t *testing.T) {
 	tests := []struct {
-		name           string
-		semanticType   sql2.SemanticType
-		expectedSQL    string
-		shouldSupport  bool
+		name          string
+		semanticType  sql2.SemanticType
+		expectedSQL   string
+		shouldSupport bool
 	}{
 		{
 			name:          "uint256 maps to rw_uint256",
@@ -157,10 +157,10 @@ func TestMapSemanticType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sqlType, supported := MapSemanticType(tt.semanticType)
-			
+
 			assert.Equal(t, tt.shouldSupport, supported, "MapSemanticType() supported")
 			assert.Equal(t, tt.expectedSQL, sqlType, "MapSemanticType() sqlType")
-			
+
 			// Test SupportsSemanticType consistency
 			assert.Equal(t, tt.shouldSupport, SupportsSemanticType(tt.semanticType), "SupportsSemanticType() consistency")
 		})
@@ -222,12 +222,12 @@ func TestConvertToRwUint256(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := convertToRwUint256(tt.value, tt.formatHint)
-			
+
 			if tt.shouldError {
 				assert.Error(t, err, "convertToRwUint256() should error")
 				return
 			}
-			
+
 			assert.NoError(t, err, "convertToRwUint256() should not error")
 			assert.Equal(t, tt.expected, result, "convertToRwUint256() result")
 		})
@@ -296,12 +296,12 @@ func TestConvertToRwInt256(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := convertToRwInt256(tt.value, tt.formatHint)
-			
+
 			if tt.shouldError {
 				assert.Error(t, err, "convertToRwInt256() should error")
 				return
 			}
-			
+
 			assert.NoError(t, err, "convertToRwInt256() should not error")
 			assert.Equal(t, tt.expected, result, "convertToRwInt256() result")
 		})
@@ -356,12 +356,12 @@ func TestConvertToAddress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := convertToAddress(tt.value)
-			
+
 			if tt.shouldError {
 				assert.Error(t, err, "convertToAddress() should error")
 				return
 			}
-			
+
 			assert.NoError(t, err, "convertToAddress() should not error")
 			assert.Equal(t, tt.expected, result, "convertToAddress() result")
 		})
@@ -423,12 +423,12 @@ func TestConvertSemanticValue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := ConvertSemanticValue(tt.semanticType, tt.value, tt.formatHint)
-			
+
 			if tt.shouldError {
 				assert.Error(t, err, "ConvertSemanticValue() should error")
 				return
 			}
-			
+
 			assert.NoError(t, err, "ConvertSemanticValue() should not error")
 			assert.NotEmpty(t, result, "ConvertSemanticValue() should return non-empty result")
 		})

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	_ "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/logging"
@@ -750,7 +750,7 @@ func runRisingWaveSinkerTest[R any](
 
 	s, err := sink.New(sink.SubstreamsModeDevelopment, false, testPackage, testPackage.Modules.Modules[0], []byte("unused"), testClientConfig, logger, nil)
 	require.NoError(t, err)
-	sinker, _ := New(s, l, logger, nil)
+	sinker, _ := New(s, l, logger, tracer, 3, 1*time.Second)
 	t.Cleanup(func() { sinker.loader.Close() })
 
 	require.NoError(t, l.InsertCursor(ctx, sinker.OutputModuleHash(), sink.NewBlankCursor()))
@@ -794,7 +794,7 @@ func runClickHouseSinkerTest[R any](
 
 	s, err := sink.New(sink.SubstreamsModeDevelopment, false, testPackage, testPackage.Modules.Modules[0], []byte("unused"), testClientConfig, logger, nil)
 	require.NoError(t, err)
-	sinker, _ := New(s, l, logger, nil)
+	sinker, _ := New(s, l, logger, tracer, 3, 1*time.Second)
 	t.Cleanup(func() { sinker.loader.Close() })
 
 	require.NoError(t, l.InsertCursor(ctx, sinker.OutputModuleHash(), sink.NewBlankCursor()))
@@ -1031,11 +1031,11 @@ func setupRisingwaveContainer(t *testing.T, testTables map[string]*db2.TableInfo
 
 	risingwaveContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: "risingwavelabs/risingwave:latest",
+			Image:        "risingwavelabs/risingwave:latest",
 			ExposedPorts: []string{"4566/tcp", "5691/tcp"},
-			Cmd: []string{"playground"},
+			Cmd:          []string{"playground"},
 			WaitingFor: wait.ForListeningPort("4566/tcp").
-				WithStartupTimeout(90*time.Second),
+				WithStartupTimeout(90 * time.Second),
 		},
 		Started: true,
 	})
@@ -1044,11 +1044,11 @@ func setupRisingwaveContainer(t *testing.T, testTables map[string]*db2.TableInfo
 
 	host, err := risingwaveContainer.Host(ctx)
 	require.NoError(t, err)
-	
+
 	port, err := risingwaveContainer.MappedPort(ctx, "4566")
 	require.NoError(t, err)
 
-	dbConnectionString = fmt.Sprintf("risingwave://%s:%s@%s:%s/%s?sslmode=disable", 
+	dbConnectionString = fmt.Sprintf("risingwave://%s:%s@%s:%s/%s?sslmode=disable",
 		dbUser, dbPassword, host, port.Port(), dbName)
 
 	l := db2.NewTestLoader(
@@ -1091,16 +1091,6 @@ var testPackage = &pbsubstreams.Package{
 
 var testClientConfig = &client.SubstreamsClientConfig{}
 
-func pruneAbove(blockNum uint64) string {
-	return fmt.Sprintf(`DELETE FROM "testschema"."inserts_history" WHERE block_num > %d;DELETE FROM "testschema"."updates_history" WHERE block_num > %d;DELETE FROM "testschema"."deletes_history" WHERE block_num > %d;`,
-		blockNum, blockNum, blockNum)
-}
-
-func pruneBelow(blockNum uint64) string {
-	return fmt.Sprintf(`DELETE FROM "testschema"."inserts_history" WHERE block_num <= %d;DELETE FROM "testschema"."updates_history" WHERE block_num <= %d;DELETE FROM "testschema"."deletes_history" WHERE block_num <= %d;`,
-		blockNum, blockNum, blockNum)
-}
-
 func getFields(fieldsAndValues ...string) (out []*pbdatabase.Field) {
 	if len(fieldsAndValues)%2 != 0 {
 		panic("tableChangeSinglePK needs even number of fieldsAndValues")
@@ -1112,17 +1102,6 @@ func getFields(fieldsAndValues ...string) (out []*pbdatabase.Field) {
 		})
 	}
 	return
-}
-
-func compositePK(keyValuePairs ...string) map[string]string {
-	if len(keyValuePairs)%2 != 0 {
-		panic("compositePK needs even number of keyValuePairs")
-	}
-	out := make(map[string]string)
-	for i := 0; i < len(keyValuePairs); i += 2 {
-		out[keyValuePairs[i]] = keyValuePairs[i+1]
-	}
-	return out
 }
 
 func insertRowSinglePK(table string, pk string, fieldsAndValues ...string) *pbdatabase.TableChange {
@@ -1145,30 +1124,6 @@ func insertRowMultiplePK(table string, pk map[string]string, fieldsAndValues ...
 			},
 		},
 		Operation: pbdatabase.TableChange_OPERATION_CREATE,
-		Fields:    getFields(fieldsAndValues...),
-	}
-}
-
-func upsertRowSinglePK(table string, pk string, fieldsAndValues ...string) *pbdatabase.TableChange {
-	return &pbdatabase.TableChange{
-		Table: table,
-		PrimaryKey: &pbdatabase.TableChange_Pk{
-			Pk: pk,
-		},
-		Operation: pbdatabase.TableChange_OPERATION_UPSERT,
-		Fields:    getFields(fieldsAndValues...),
-	}
-}
-
-func upsertRowMultiplePK(table string, pk map[string]string, fieldsAndValues ...string) *pbdatabase.TableChange {
-	return &pbdatabase.TableChange{
-		Table: table,
-		PrimaryKey: &pbdatabase.TableChange_CompositePk{
-			CompositePk: &pbdatabase.CompositePrimaryKey{
-				Keys: pk,
-			},
-		},
-		Operation: pbdatabase.TableChange_OPERATION_UPSERT,
 		Fields:    getFields(fieldsAndValues...),
 	}
 }
@@ -1236,13 +1191,6 @@ func blockScopedData(module string, changes []*pbdatabase.TableChange, blockNum 
 		FinalBlockHeight: finalBlockNum,
 	}
 }
-func mustNewTableInfo(schema, name string, pkList []string, columnsByName map[string]*db2.ColumnInfo) *db2.TableInfo {
-	ti, err := db2.NewTableInfo(schema, name, pkList, columnsByName)
-	if err != nil {
-		panic(err)
-	}
-	return ti
-}
 
 func clock(id string, num uint64) *pbsubstreams.Clock {
 	return &pbsubstreams.Clock{Id: id, Number: num}
@@ -1264,6 +1212,49 @@ func simpleCursor(num, finalNum uint64) string {
 		LIB:       lib,
 		HeadBlock: blk,
 	}).ToOpaque()
+}
+
+func upsertRowSinglePK(table string, pk string, fieldsAndValues ...string) *pbdatabase.TableChange {
+	return &pbdatabase.TableChange{
+		Table: table,
+		PrimaryKey: &pbdatabase.TableChange_Pk{
+			Pk: pk,
+		},
+		Operation: pbdatabase.TableChange_OPERATION_UPSERT,
+		Fields:    getFields(fieldsAndValues...),
+	}
+}
+
+func upsertRowMultiplePK(table string, pk map[string]string, fieldsAndValues ...string) *pbdatabase.TableChange {
+	return &pbdatabase.TableChange{
+		Table: table,
+		PrimaryKey: &pbdatabase.TableChange_CompositePk{
+			CompositePk: &pbdatabase.CompositePrimaryKey{
+				Keys: pk,
+			},
+		},
+		Operation: pbdatabase.TableChange_OPERATION_UPSERT,
+		Fields:    getFields(fieldsAndValues...),
+	}
+}
+
+func mustNewTableInfo(schema, name string, pkList []string, columnsByName map[string]*db2.ColumnInfo) *db2.TableInfo {
+	ti, err := db2.NewTableInfo(schema, name, pkList, columnsByName)
+	if err != nil {
+		panic(err)
+	}
+	return ti
+}
+
+func compositePK(keys ...string) map[string]string {
+	if len(keys)%2 != 0 {
+		panic("odd number of keys")
+	}
+	out := make(map[string]string)
+	for i := 0; i < len(keys); i += 2 {
+		out[keys[i]] = keys[i+1]
+	}
+	return out
 }
 
 func ptr[T any](v T) *T {
