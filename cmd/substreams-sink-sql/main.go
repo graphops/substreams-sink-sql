@@ -32,6 +32,7 @@ func main() {
 		createUserCmd,
 		fromProtoCmd,
 		fromProtoApplyConstraintsCmd,
+		fromProtoExportCmd,
 
 		ConfigureViper("SINK_SQL"),
 		ConfigureVersion(version),
