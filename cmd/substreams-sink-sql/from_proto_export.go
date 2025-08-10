@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1016,9 +1017,8 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 	case string:
 		return escapeCSVValue(v)
 	case []byte:
-		// PostgreSQL COPY expects \xHEX for bytea (without doubling backslash)
-		// The CSV itself doesn't need escaping for this format
-		return fmt.Sprintf("\\x%x", v)
+		// Different databases expect different formats for binary data in CSV
+		return g.formatBinaryData(v)
 	case bool:
 		if v {
 			return "true"
@@ -1049,6 +1049,37 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 		}
 		// For any other types, convert to string and escape
 		return escapeCSVValue(fmt.Sprintf("%v", value))
+	}
+}
+
+// formatBinaryData formats binary data according to the dialect's CSV/COPY format requirements
+func (g *protoAwareCSVGenerator) formatBinaryData(data []byte) string {
+	// Determine the driver type from the dialect
+	var driver string
+	switch g.dialect.(type) {
+	case *postgres.DialectPostgres:
+		driver = "postgres"
+	case *clickhouse.DialectClickHouse:
+		driver = "clickhouse"
+	case *risingwave.DialectRisingwave:
+		driver = "risingwave"
+	default:
+		// Fallback to PostgreSQL format
+		driver = "postgres"
+	}
+
+	switch driver {
+	case "postgres", "risingwave":
+		// PostgreSQL and RisingWave COPY CSV format expects \xHEX
+		// The backslash is literal in the CSV (not escaped)
+		return fmt.Sprintf("\\x%x", data)
+	case "clickhouse":
+		// ClickHouse CSV imports work better with base64 encoded strings
+		// This can be decoded using base64Decode() function in ClickHouse
+		return base64.StdEncoding.EncodeToString(data)
+	default:
+		// Default to PostgreSQL format
+		return fmt.Sprintf("\\x%x", data)
 	}
 }
 

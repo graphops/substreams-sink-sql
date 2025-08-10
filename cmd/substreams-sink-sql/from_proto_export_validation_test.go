@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -11,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	"go.uber.org/zap"
 )
@@ -180,29 +183,85 @@ func TestParentIDColumnInCSV(t *testing.T) {
 	assert.True(t, hasParentID, "Child table CSV should include parent_id column")
 }
 
-// TestBinaryDataFormatting validates binary data is formatted correctly for PostgreSQL
+// TestBinaryDataFormatting validates binary data is formatted correctly for each dialect
 func TestBinaryDataFormatting(t *testing.T) {
-	// This test validates Issue #5: Binary data format
+	// This test validates Issue #5: Binary data format for each dialect
 	
-	gen := &protoAwareCSVGenerator{
-		logger: zap.NewNop(),
+	testSchema := &schema.Schema{
+		Name:          "test",
+		TableRegistry: make(map[string]*schema.Table),
 	}
-
+	
+	// Create proper field descriptors
+	idFd := createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_STRING)
+	dataFd := createSimpleFieldDescriptor("data", descriptor.FieldDescriptorProto_TYPE_BYTES)
+	
 	testTable := &schema.Table{
 		Name: "test",
 		Columns: []*schema.Column{
-			{Name: "data"},
+			{Name: "id", IsPrimaryKey: true, FieldDescriptor: idFd},
+			{Name: "data", FieldDescriptor: dataFd},
+		},
+		PrimaryKey: &schema.PrimaryKey{
+			Name:            "id",
+			Index:           0,
+			FieldDescriptor: idFd,
 		},
 	}
-
-	// Test binary data
-	binaryData := []byte{0x01, 0x02, 0x03, 0xAB, 0xCD, 0xEF}
-	formatted := gen.formatValue(binaryData, "data", testTable)
+	testSchema.TableRegistry["test"] = testTable
 	
-	// PostgreSQL COPY expects \x followed by hex for bytea
-	// In CSV format, this is the literal string that should appear
-	expected := "\\x010203abcdef"
-	assert.Equal(t, expected, formatted, "Binary data should be formatted as PostgreSQL bytea")
+	binaryData := []byte{0x01, 0x02, 0x03, 0xAB, 0xCD, 0xEF}
+	
+	// Test PostgreSQL dialect
+	t.Run("PostgreSQL", func(t *testing.T) {
+		pgDialect, err := postgres.NewDialectPostgres(testSchema, zap.NewNop())
+		require.NoError(t, err)
+		
+		gen := &protoAwareCSVGenerator{
+			logger:  zap.NewNop(),
+			dialect: pgDialect,
+			schema:  testSchema,
+		}
+		
+		formatted := gen.formatValue(binaryData, "data", testTable)
+		// PostgreSQL COPY expects \x followed by hex for bytea
+		expected := "\\x010203abcdef"
+		assert.Equal(t, expected, formatted, "Binary data should be formatted as PostgreSQL bytea")
+	})
+	
+	// Test ClickHouse dialect
+	t.Run("ClickHouse", func(t *testing.T) {
+		chDialect, err := clickhouse.NewDialectClickHouse(testSchema, zap.NewNop())
+		require.NoError(t, err)
+		
+		gen := &protoAwareCSVGenerator{
+			logger:  zap.NewNop(),
+			dialect: chDialect,
+			schema:  testSchema,
+		}
+		
+		formatted := gen.formatValue(binaryData, "data", testTable)
+		// ClickHouse CSV expects base64 encoded strings
+		expected := base64.StdEncoding.EncodeToString(binaryData)
+		assert.Equal(t, expected, formatted, "Binary data should be base64 encoded for ClickHouse")
+	})
+	
+	// Test RisingWave dialect
+	t.Run("RisingWave", func(t *testing.T) {
+		rwDialect, err := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
+		require.NoError(t, err)
+		
+		gen := &protoAwareCSVGenerator{
+			logger:  zap.NewNop(),
+			dialect: rwDialect,
+			schema:  testSchema,
+		}
+		
+		formatted := gen.formatValue(binaryData, "data", testTable)
+		// RisingWave uses PostgreSQL-compatible format
+		expected := "\\x010203abcdef"
+		assert.Equal(t, expected, formatted, "Binary data should be formatted as PostgreSQL bytea for RisingWave")
+	})
 }
 
 // TestCSVEscaping validates CSV special character escaping

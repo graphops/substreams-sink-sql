@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"testing"
 	"time"
@@ -12,7 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
+	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	"go.uber.org/zap"
 )
@@ -166,50 +169,72 @@ func TestParentChildRelationships(t *testing.T) {
 	t.Log("Parent-child relationship handling validated")
 }
 
-// TestBinaryDataFormatting validates binary data is formatted correctly
-func TestBinaryDataFormattingFixed(t *testing.T) {
-	gen := &protoAwareCSVGenerator{
-		logger: zap.NewNop(),
+// TestBinaryDataFormattingAllDialects validates binary data is formatted correctly for all dialects
+func TestBinaryDataFormattingAllDialects(t *testing.T) {
+	testSchema := &schema.Schema{
+		Name:          "test",
+		TableRegistry: make(map[string]*schema.Table),
 	}
+
+	// Create proper field descriptors
+	idFd := createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_STRING)
+	dataFd := createSimpleFieldDescriptor("data", descriptor.FieldDescriptorProto_TYPE_BYTES)
 
 	testTable := &schema.Table{
 		Name: "test",
 		Columns: []*schema.Column{
-			{Name: "data"},
+			{Name: "id", IsPrimaryKey: true, FieldDescriptor: idFd},
+			{Name: "data", FieldDescriptor: dataFd},
+		},
+		PrimaryKey: &schema.PrimaryKey{
+			Name:            "id",
+			Index:           0,
+			FieldDescriptor: idFd,
 		},
 	}
+	testSchema.TableRegistry["test"] = testTable
 
 	testCases := []struct {
-		name     string
-		input    []byte
-		expected string
+		name  string
+		input []byte
 	}{
-		{
-			name:     "Simple bytes",
-			input:    []byte{0x01, 0x02, 0x03},
-			expected: "\\x010203",
-		},
-		{
-			name:     "Bytes with high values",
-			input:    []byte{0xAB, 0xCD, 0xEF},
-			expected: "\\xabcdef",
-		},
-		{
-			name:     "Empty bytes",
-			input:    []byte{},
-			expected: "\\x",
-		},
-		{
-			name:     "Single byte",
-			input:    []byte{0xFF},
-			expected: "\\xff",
-		},
+		{name: "Simple bytes", input: []byte{0x01, 0x02, 0x03}},
+		{name: "Bytes with high values", input: []byte{0xAB, 0xCD, 0xEF}},
+		{name: "Empty bytes", input: []byte{}},
+		{name: "Single byte", input: []byte{0xFF}},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := gen.formatValue(tc.input, "data", testTable)
-			assert.Equal(t, tc.expected, result, "Binary data should be formatted for PostgreSQL COPY")
+			// Test PostgreSQL
+			pgDialect, _ := postgres.NewDialectPostgres(testSchema, zap.NewNop())
+			pgGen := &protoAwareCSVGenerator{
+				logger:  zap.NewNop(),
+				dialect: pgDialect,
+				schema:  testSchema,
+			}
+			pgResult := pgGen.formatValue(tc.input, "data", testTable)
+			assert.Equal(t, fmt.Sprintf("\\x%x", tc.input), pgResult, "PostgreSQL format")
+
+			// Test ClickHouse
+			chDialect, _ := clickhouse.NewDialectClickHouse(testSchema, zap.NewNop())
+			chGen := &protoAwareCSVGenerator{
+				logger:  zap.NewNop(),
+				dialect: chDialect,
+				schema:  testSchema,
+			}
+			chResult := chGen.formatValue(tc.input, "data", testTable)
+			assert.Equal(t, base64.StdEncoding.EncodeToString(tc.input), chResult, "ClickHouse format")
+
+			// Test RisingWave
+			rwDialect, _ := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
+			rwGen := &protoAwareCSVGenerator{
+				logger:  zap.NewNop(),
+				dialect: rwDialect,
+				schema:  testSchema,
+			}
+			rwResult := rwGen.formatValue(tc.input, "data", testTable)
+			assert.Equal(t, fmt.Sprintf("\\x%x", tc.input), rwResult, "RisingWave format")
 		})
 	}
 }
