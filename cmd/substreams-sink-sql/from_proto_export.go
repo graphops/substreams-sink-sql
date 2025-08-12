@@ -41,7 +41,7 @@ import (
 )
 
 var fromProtoExportCmd = Command(fromProtoExportE,
-	"from-proto-export <dsn> <manifest> [start]:[stop]",
+	"from-proto-export <dsn> <manifest> [module] [start]:[stop]",
 	"Export SQL schema and CSV data exactly as from-proto expects",
 	Description(`
 		Generates SQL schema definitions and CSV data dumps that are 100% compatible with from-proto mode.
@@ -51,7 +51,7 @@ var fromProtoExportCmd = Command(fromProtoExportE,
 		
 		This mode ensures perfect compatibility for operators who need to manage the injection process.
 	`),
-	RangeArgs(2, 3),
+	RangeArgs(2, 4),
 	Flags(func(flags *pflag.FlagSet) {
 		// Reuse from-proto flags for consistency
 		sink.AddFlagsToSet(flags, ignoreUndoBufferSize{})
@@ -80,8 +80,22 @@ func fromProtoExportE(cmd *cobra.Command, args []string) error {
 
 	outputModuleName := sink.InferOutputModuleFromPackage
 	blockRange := ""
+	
+	// Handle optional module name and block range
 	if len(args) == 3 {
-		blockRange = args[2]
+		// Could be either module name or block range
+		arg := args[2]
+		if strings.Contains(arg, ":") {
+			// It's a block range
+			blockRange = arg
+		} else {
+			// It's a module name
+			outputModuleName = arg
+		}
+	} else if len(args) == 4 {
+		// Both module name and block range provided
+		outputModuleName = args[2]
+		blockRange = args[3]
 	}
 
 	// Parse flags
@@ -119,12 +133,16 @@ func fromProtoExportE(cmd *cobra.Command, args []string) error {
 	// Parse block range exactly like from-proto
 	startBlock := sflags.MustGetString(cmd, "start-block")
 	endBlock := sflags.MustGetString(cmd, "stop-block")
-	if startBlock != "" {
-		blockRange = startBlock
-	}
-	blockRange += ":"
-	if endBlock != "0" {
-		blockRange += endBlock
+	
+	// Only build blockRange from flags if it wasn't provided as argument
+	if blockRange == "" {
+		if startBlock != "" {
+			blockRange = startBlock
+		}
+		blockRange += ":"
+		if endBlock != "0" {
+			blockRange += endBlock
+		}
 	}
 
 	// Parse DSN
