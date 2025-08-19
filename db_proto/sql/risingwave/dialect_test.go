@@ -196,7 +196,7 @@ func TestDialectRisingwave_CreateTable_ChildTable(t *testing.T) {
 	require.NoError(t, err)
 
 	sql := d.CreateTableSql["mints"]
-	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.mints")
+	assert.Contains(t, sql, "CREATE TABLE IF NOT EXISTS public.mints")
 	assert.Contains(t, sql, "block_number INTEGER")
 	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE")
 	assert.Contains(t, sql, "instruction_id CHARACTER VARYING")
@@ -261,6 +261,10 @@ func TestDialectRisingwave_CreateTable_PreventsDuplicateColumns(t *testing.T) {
 
 	table := &schema.Table{
 		Name: "test_table",
+		PrimaryKey: &schema.PrimaryKey{
+			Name:            "name",
+			FieldDescriptor: nameField,
+		},
 		Columns: []*schema.Column{
 			{Name: "block_number", FieldDescriptor: idField}, // This should be skipped since block_number is added automatically
 			{Name: "name", FieldDescriptor: nameField},
@@ -273,7 +277,7 @@ func TestDialectRisingwave_CreateTable_PreventsDuplicateColumns(t *testing.T) {
 
 	sql := d.CreateTableSql["test_table"]
 
-	// block_number should appear only once
+	// block_number should appear only once (user-defined duplicate prevented)
 	assert.Equal(t, 1, strings.Count(sql, "block_number"))
 	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
 }
@@ -582,7 +586,7 @@ func TestDialectRisingwave_ComplexTableStructure(t *testing.T) {
 	sql := d.CreateTableSql["complex_users"]
 
 	// Check all expected elements are present
-	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.complex_users")
+	assert.Contains(t, sql, "CREATE TABLE IF NOT EXISTS public.complex_users")
 	assert.Contains(t, sql, "id CHARACTER VARYING PRIMARY KEY")
 	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
 	assert.Contains(t, sql, `"age" INTEGER`)
