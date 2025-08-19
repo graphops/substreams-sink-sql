@@ -184,7 +184,7 @@ func (d RisingwaveDialect) GetCreateCursorQuery(schema string, withPostgraphile 
 	out := fmt.Sprintf(cli.Dedent(`
 		create table if not exists %s.%s
 		(
-			id         varchar not null constraint %s primary key,
+			id         varchar constraint %s primary key,
 			cursor     varchar,
 			block_num  bigint,
 			block_id   varchar
