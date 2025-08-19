@@ -201,7 +201,7 @@ func (d RisingwaveDialect) GetCreateHistoryQuery(schema string, withPostgraphile
 	out := fmt.Sprintf(cli.Dedent(`
 		create table if not exists %s
 		(
-            id           BIGINT NOT NULL,
+            id           BIGINT,
             op           CHARACTER VARYING,
             table_name   varchar,
 			pk           varchar,
