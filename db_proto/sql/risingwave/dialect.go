@@ -22,13 +22,13 @@ const risingwaveStaticSql = `
 
 	CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
 		name VARCHAR PRIMARY KEY,
-		cursor VARCHAR NOT NULL
+		cursor VARCHAR
 	) ON CONFLICT OVERWRITE;
 
 	CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
 		number INTEGER PRIMARY KEY,
-		hash VARCHAR NOT NULL,
-		timestamp TIMESTAMP WITH TIME ZONE NOT NULL
+		hash VARCHAR,
+		timestamp TIMESTAMP WITH TIME ZONE
 	);
 `
 
@@ -76,7 +76,7 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 
 	tableName := d.FullTableName(table)
 
-	sb.WriteString(fmt.Sprintf("CREATE TABLE  IF NOT EXISTS %s (", tableName))
+	sb.WriteString(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (", tableName))
 
 	// Add primary key if it exists
 	var primaryKeyFieldName string
@@ -88,8 +88,8 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 	}
 
 	// Always add block metadata columns
-	sb.WriteString(" block_number INTEGER NOT NULL,")
-	sb.WriteString(" block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,")
+	sb.WriteString(" block_number INTEGER,")
+	sb.WriteString(" block_timestamp TIMESTAMP WITH TIME ZONE,")
 	addedColumns["block_number"] = struct{}{}
 	addedColumns["block_timestamp"] = struct{}{}
 
@@ -104,7 +104,7 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 		for _, parentField := range parentTable.Columns {
 			if parentField.Name == table.ChildOf.ParentTableField {
 				if _, exists := addedColumns[parentField.Name]; !exists {
-					sb.WriteString(fmt.Sprintf("%s %s NOT NULL,", parentField.Name, MapFieldType(parentField.FieldDescriptor)))
+					sb.WriteString(fmt.Sprintf("%s %s,", parentField.Name, MapFieldType(parentField.FieldDescriptor)))
 					addedColumns[parentField.Name] = struct{}{}
 					parentKeyColumns = append(parentKeyColumns, parentField.Name)
 				}
@@ -126,6 +126,11 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 
 		// Skip primary key (already handled above)
 		if f.Name == primaryKeyFieldName {
+			continue
+		}
+
+		// Skip automatic block metadata columns (already added above)
+		if f.Name == "block_number" || f.Name == "block_timestamp" {
 			continue
 		}
 
