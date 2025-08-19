@@ -279,7 +279,7 @@ func TestDialectRisingwave_CreateTable_PreventsDuplicateColumns(t *testing.T) {
 
 	// block_number should appear only once (user-defined duplicate prevented)
 	assert.Equal(t, 1, strings.Count(sql, "block_number"))
-	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
+	assert.Contains(t, sql, "name CHARACTER VARYING PRIMARY KEY")
 }
 
 func TestDialectRisingwave_CreateInsertFromDescriptor_SimpleTable(t *testing.T) {
