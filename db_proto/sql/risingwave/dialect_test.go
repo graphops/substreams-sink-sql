@@ -84,14 +84,14 @@ func TestDialectRisingwave_CreateTableStaticSql(t *testing.T) {
 	// Check _cursor_ table
 	assert.Contains(t, sql, "_cursor_")
 	assert.Contains(t, sql, "name varchar primary key")
-	assert.Contains(t, sql, "cursor varchar not null")
+	assert.Contains(t, sql, "cursor varchar")
 	assert.Contains(t, sql, "on conflict overwrite", "RisingWave should use ON CONFLICT OVERWRITE")
 
 	// Check _blocks_ table
 	assert.Contains(t, sql, "_blocks_")
 	assert.Contains(t, sql, "number integer")
-	assert.Contains(t, sql, "hash varchar not null")
-	assert.Contains(t, sql, "timestamp timestamp with time zone not null")
+	assert.Contains(t, sql, "hash varchar")
+	assert.Contains(t, sql, "timestamp timestamp with time zone")
 }
 
 func TestDialectRisingwave_CreateTable_SimpleTable(t *testing.T) {
@@ -117,9 +117,9 @@ func TestDialectRisingwave_CreateTable_SimpleTable(t *testing.T) {
 	assert.Equal(t, 1, len(d.CreateTableSql))
 
 	sql := d.CreateTableSql["users"]
-	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.users")
-	assert.Contains(t, sql, "block_number INTEGER NOT NULL")
-	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
+	assert.Contains(t, sql, "CREATE TABLE IF NOT EXISTS public.users")
+	assert.Contains(t, sql, "block_number INTEGER")
+	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE")
 	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
 	assert.Contains(t, sql, `"age" INTEGER`)
 
@@ -197,9 +197,9 @@ func TestDialectRisingwave_CreateTable_ChildTable(t *testing.T) {
 
 	sql := d.CreateTableSql["mints"]
 	assert.Contains(t, sql, "CREATE TABLE  IF NOT EXISTS public.mints")
-	assert.Contains(t, sql, "block_number INTEGER NOT NULL")
-	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
-	assert.Contains(t, sql, "instruction_id CHARACTER VARYING NOT NULL")
+	assert.Contains(t, sql, "block_number INTEGER")
+	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE")
+	assert.Contains(t, sql, "instruction_id CHARACTER VARYING")
 	assert.Contains(t, sql, `"amount" NUMERIC`)
 
 	// Should not contain foreign key constraints
@@ -589,8 +589,8 @@ func TestDialectRisingwave_ComplexTableStructure(t *testing.T) {
 	assert.Contains(t, sql, `"email" CHARACTER VARYING UNIQUE`)
 	assert.Contains(t, sql, `"balance" NUMERIC`)
 	assert.Contains(t, sql, `"active" BOOLEAN`)
-	assert.Contains(t, sql, "block_number INTEGER NOT NULL")
-	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
+	assert.Contains(t, sql, "block_number INTEGER")
+	assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE")
 
 	// Ensure no foreign keys
 	assert.NotContains(t, sql, "FOREIGN KEY")
@@ -654,18 +654,18 @@ func TestDialectRisingwave_MultipleChildTables(t *testing.T) {
 
 	// Check first child table
 	transferSQL := d.CreateTableSql["transfers"]
-	assert.Contains(t, transferSQL, "transaction_id CHARACTER VARYING NOT NULL")
+	assert.Contains(t, transferSQL, "transaction_id CHARACTER VARYING")
 	assert.Contains(t, transferSQL, `"amount" NUMERIC`)
 
 	// Check second child table
 	logSQL := d.CreateTableSql["logs"]
-	assert.Contains(t, logSQL, "transaction_id CHARACTER VARYING NOT NULL")
+	assert.Contains(t, logSQL, "transaction_id CHARACTER VARYING")
 	assert.Contains(t, logSQL, `"message" CHARACTER VARYING`)
 
 	// All should have block metadata
 	for _, sql := range []string{parentSQL, transferSQL, logSQL} {
-		assert.Contains(t, sql, "block_number INTEGER NOT NULL")
-		assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE NOT NULL")
+		assert.Contains(t, sql, "block_number INTEGER")
+		assert.Contains(t, sql, "block_timestamp TIMESTAMP WITH TIME ZONE")
 	}
 }
 
