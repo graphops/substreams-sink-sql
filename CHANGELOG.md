@@ -5,13 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v4.6.5
+
+### `substreams-sink-sql run`
+
+* Fixed delete operation on composite keys.
+
+* Read tables information only for given schema to avoid walking non-related tables.
 
 ### Clickhouse & `substreams-sink-sql from-proto`
+
+* Improved signal handling by properly logging which signal was received.
 
 * If a `clickhouse_table_options.partition_fields` already contains some partition for `_block_timestamp_`, the default `(toYYYYMM(_block_timestamp_))` will not be added anymore.
 
 * The default partition on `_block_timestamp_` is now `(toYYYYMM(_block_timestamp_))` instead of just `_block_timestamp_`.
+
+### Both implementations
+
+* Automatically skip block flush if the average flush duration is above the time between blocks, preventing drift in these situations
 
 ## v4.6.4
 

@@ -6,9 +6,11 @@ import (
 	"github.com/jhump/protoreflect/desc"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/streamingfast/cli"
 	. "github.com/streamingfast/cli"
 	"github.com/streamingfast/cli/sflags"
 	sink "github.com/streamingfast/substreams-sink"
+	sinksql "github.com/streamingfast/substreams-sink-sql"
 	"github.com/streamingfast/substreams-sink-sql/db_changes/db"
 	"github.com/streamingfast/substreams-sink-sql/db_proto"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/proto"
@@ -49,7 +51,7 @@ var fromProtoCmd = Command(fromProtoE,
 //todo: handle network
 
 func fromProtoE(cmd *cobra.Command, args []string) error {
-	//app := NewApplication(cmd.Context())
+	app := cli.NewApplication(cmd.Context())
 
 	dsnString := args[0]
 	manifestPath := args[1]
@@ -60,17 +62,10 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 	}
 
 	useConstraints := !sflags.MustGetBool(cmd, "no-constraints")
-	//useTransactions := !sflags.MustGetBool(cmd, "no-transactions")
 	blockBatchSize := sflags.MustGetInt(cmd, "block-batch-size")
 
 	useTransactions := true
 	parallel := false
-
-	//parallel := sflags.MustGetBool(cmd, "parallel")
-	//if parallel {
-	//	useConstraints = false
-	//	useTransactions = false
-	//}
 
 	endpoint := sflags.MustGetString(cmd, "substreams-endpoint")
 	if endpoint == "" {
@@ -121,7 +116,7 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not find output type for module %s", outputModuleName)
 	}
 
-	service, err := extractSinkService(spkg)
+	service, err := sinksql.ExtractSinkService(spkg)
 	if err != nil {
 		service = &pbsql.Service{}
 	}
@@ -199,11 +194,11 @@ func fromProtoE(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating sinker: %w", err)
 	}
 
-	err = sinker.Run(cmd.Context())
-	if err != nil {
-		return fmt.Errorf("running sinker: %w", err)
+	app.SuperviseAndStartUsing(sinker, sinker.Run)
+
+	if err := app.WaitForTermination(zlog, 0, 0); err != nil {
+		cli.Quit("application terminated with error: %s", err)
 	}
 
-	sinker.LogStats()
 	return nil
 }

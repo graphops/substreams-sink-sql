@@ -6,12 +6,13 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/logging"
-	db2 "github.com/streamingfast/substreams-sink-sql/db_changes/db"
 	"github.com/streamingfast/substreams/client"
 	pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
 	pbsubstreams "github.com/streamingfast/substreams/pb/sf/substreams/v1"
@@ -33,14 +34,21 @@ import (
 var logger *zap.Logger
 var tracer logging.Tracer
 
+const defaultOutputModuleName = "map_output"
+
 func init() {
 	logger, tracer = logging.ApplicationLogger("test", "test")
 }
 
 type PostgresSeeder = func(ctx context.Context, user, password, database, schema, dsn string, container *postgres.PostgresContainer) error
 
+type PostgresContainerConfig struct {
+	Image        string
+	AvoidRestore bool
+}
+
 // setupRawPostgresContainer spins up a Postgres Docker container and let a seeder function seed the database.
-func setupRawPostgresContainer(t *testing.T, schema string, seedDb PostgresSeeder) (dbConnectionString string, container *postgres.PostgresContainer) {
+func setupRawPostgresContainer(t *testing.T, schema string, seedDb PostgresSeeder, config PostgresContainerConfig) (dbConnectionString string, container *postgres.PostgresContainer) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -49,7 +57,7 @@ func setupRawPostgresContainer(t *testing.T, schema string, seedDb PostgresSeede
 	dbPassword := "password"
 
 	postgresContainer, err := postgres.Run(ctx,
-		"postgres:16-alpine",
+		config.Image,
 		postgres.WithDatabase(dbName),
 		postgres.WithUsername(dbUser),
 		postgres.WithPassword(dbPassword),
@@ -67,41 +75,31 @@ func setupRawPostgresContainer(t *testing.T, schema string, seedDb PostgresSeede
 	_, _, err = postgresContainer.Exec(ctx, []string{"psql", "-U", dbUser, "-d", dbName, "-c", fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schema)})
 	require.NoError(t, err)
 
-	fmt.Println("Postgres container started with connection string:", dbConnectionString)
-	require.NoError(t, seedDb(ctx, dbUser, dbPassword, dbName, schema, dbConnectionString, postgresContainer))
+	if seedDb != nil {
+		require.NoError(t, seedDb(ctx, dbUser, dbPassword, dbName, schema, dbConnectionString, postgresContainer))
+	}
 
-	err = postgresContainer.Snapshot(ctx)
-	require.NoError(t, err)
+	if !config.AvoidRestore {
+		err = postgresContainer.Snapshot(ctx)
+		require.NoError(t, err)
+	}
 
 	return dbConnectionString, postgresContainer
 }
 
 const dbChangesSchemaName = "testschema"
 
-// setupDbChangesPostgresContainer spins up a Postgres Docker container and initialize the database with the corresponding
-// testTables. If the testTablesSQL is `nil`, it will generate the SQL from the testTables directly, otherwise
-// it will use the provided SQL to set up the tables.
-func setupDbChangesPostgresContainer(t *testing.T, testTables map[string]*db2.TableInfo, testTablesSQL *string) (dbConnectionString string, container *postgres.PostgresContainer) {
-	t.Helper()
+func setupDbChangesPostgresContainer(t *testing.T) (dbConnectionString string, container *postgres.PostgresContainer) {
+	dbConnectionString, container = setupRawPostgresContainer(t, dbChangesSchemaName, nil, PostgresContainerConfig{
+		Image: "postgres:16-alpine",
+	})
 
-	dbConnectionString, container = setupRawPostgresContainer(t, dbChangesSchemaName, func(ctx context.Context, user, password, database, schema, dsn string, container *postgres.PostgresContainer) error {
-		l := db2.NewTestLoader(
-			t,
-			dsn+"&schemaName="+schema,
-			nil,
-			testTables,
-			logger,
-			tracer,
-		)
+	return dbConnectionString + "&schemaName=" + dbChangesSchemaName, container
+}
 
-		if testTablesSQL == nil {
-			testTablesSQL = ptr(db2.GenerateCreateTableSQL(testTables))
-		}
-
-		require.NoError(t, l.Setup(context.Background(), schema, *testTablesSQL, false))
-		require.NoError(t, l.Close())
-
-		return nil
+func setupDbChangesTimescaleDBContainer(t *testing.T) (dbConnectionString string, container *postgres.PostgresContainer) {
+	dbConnectionString, container = setupRawPostgresContainer(t, dbChangesSchemaName, nil, PostgresContainerConfig{
+		Image: "timescale/timescaledb:latest-pg16",
 	})
 
 	return dbConnectionString + "&schemaName=" + dbChangesSchemaName, container
@@ -158,16 +156,28 @@ func setupClickhouseContainer(t *testing.T, seedDb ClickhouseSeeder) (dbConnecti
 	return dbConnectionString, clickhouseContainer
 }
 
-// setupFakeSubstreamsServer creates a fake gRPC server with custom message buckets.
-// If messages is nil, uses default messages.
-func setupFakeSubstreamsServer(t *testing.T, messages ...*pbsubstreamsrpc.Response) *client.SubstreamsClientConfig {
+// setupFakeSubstreamsServer creates a new fake stream server using bucket-based iterator pattern.
+//
+// The pattern is a slice of [any] where:
+//   - [*pbsubstreamsrpc.Response]: Send this message to the stream
+//   - [error]: Close the stream with this error
+//   - nil: End of bucket boundary (start new bucket for next Blocks() call)
+//
+// For example, if you have a pattern like:
+//
+//	pattern := []any{block1, block2, errors.New("stream error"), block3, nil}
+//
+// This will create two buckets:
+// - First bucket: sends block1, block2, then closes with error
+// - Second bucket: sends block3, then ends normally
+func setupFakeSubstreamsServer(t *testing.T, pattern ...any) *client.SubstreamsClientConfig {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
 	server := grpc.NewServer()
-	pbsubstreamsrpc.RegisterStreamServer(server, NewFakeStreamServer(messages))
+	pbsubstreamsrpc.RegisterStreamServer(server, newFakeStreamServer(pattern))
 
 	go func() {
 		if err := server.Serve(listener); err != nil {
@@ -224,8 +234,6 @@ func blockScopedData(t *testing.T, blockIdentifier string, output proto.Message,
 	currentRef := bstream.NewBlockRef(blockId, blockNum)
 	finalRef := bstream.BlockRefEmpty
 
-	finalBlockHeight := uint64(0)
-
 	for _, arg := range extraArgs {
 		switch v := arg.(type) {
 		case finalBlock:
@@ -255,7 +263,34 @@ func blockScopedData(t *testing.T, blockIdentifier string, output proto.Message,
 					Name:      defaultOutputModuleName,
 					MapOutput: outputData,
 				},
-				FinalBlockHeight: finalBlockHeight,
+				FinalBlockHeight: finalRef.Num(),
+			},
+		},
+	}
+}
+
+// blockUndo creates a BlockUndoSignal response for tests
+func blockUndo(t *testing.T, lastValidBlockIdentifier string, extraArgs ...any) *pbsubstreamsrpc.Response {
+	t.Helper()
+
+	blockNum, blockId := expandBlockIdentifier(lastValidBlockIdentifier)
+	finalRef := bstream.BlockRefEmpty
+
+	for _, arg := range extraArgs {
+		switch v := arg.(type) {
+		case finalBlock:
+			finalBlockNum, finalBlockId := expandBlockIdentifier(string(v))
+			finalRef = bstream.NewBlockRef(finalBlockId, finalBlockNum)
+		}
+	}
+
+	cursor := bstream.Cursor{Step: bstream.StepUndo, Block: bstream.NewBlockRef(blockId, blockNum), HeadBlock: bstream.NewBlockRef(blockId, blockNum), LIB: finalRef}
+
+	return &pbsubstreamsrpc.Response{
+		Message: &pbsubstreamsrpc.Response_BlockUndoSignal{
+			BlockUndoSignal: &pbsubstreamsrpc.BlockUndoSignal{
+				LastValidBlock:  &pbsubstreams.BlockRef{Id: blockId, Number: blockNum},
+				LastValidCursor: cursor.ToOpaque(),
 			},
 		},
 	}
@@ -267,7 +302,12 @@ type finalBlock string
 var fixedBaseTime = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // blockTime can be used in [blockScopedData] to specify the block time for the response.
-func blockTime(t *testing.T, in string) *timestamppb.Timestamp {
+func blockTime(t *testing.T, in string) time.Time {
+	return blockTimepb(t, in).AsTime()
+}
+
+// blockTimepb can be used in [blockScopedData] to specify the block time for the response.
+func blockTimepb(t *testing.T, in string) *timestamppb.Timestamp {
 	t.Helper()
 
 	if in == "now" {
@@ -309,4 +349,40 @@ func expandBlockIdentifier(in string) (blockNum uint64, blockId string) {
 	}
 
 	return
+}
+
+type isAlwaysLiveChecker struct{}
+
+func (c *isAlwaysLiveChecker) IsLive(block *pbsubstreams.Clock) bool {
+	return true
+}
+
+// streamMock is a helper function that creates a stream of responses for testing
+func streamMock(responses ...any) []any {
+	return responses
+}
+
+func readRowsBy[T any](t *testing.T, db *sqlx.DB, tableAndOrSchema, orderBy string) []*T {
+	t.Helper()
+
+	tableIdentifier := strings.TrimSpace(tableAndOrSchema)
+	if !strings.HasPrefix(tableIdentifier, `"`) {
+		tableIdentifier = `"` + tableIdentifier
+	}
+
+	if !strings.HasSuffix(tableIdentifier, `"`) {
+		tableIdentifier += `"`
+	}
+
+	var rows []*T
+	err := db.SelectContext(context.Background(), &rows, fmt.Sprintf(`SELECT * FROM %s ORDER BY %s;`, tableIdentifier, orderBy))
+	require.NoError(t, err)
+
+	return rows
+}
+
+func readDbChangesRows[T any](t *testing.T, db *sqlx.DB, table string) []*T {
+	t.Helper()
+
+	return readRowsBy[T](t, db, fmt.Sprintf(`"%s"."%s"`, dbChangesSchemaName, table), "id")
 }

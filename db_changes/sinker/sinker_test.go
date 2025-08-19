@@ -1256,7 +1256,3 @@ func compositePK(keys ...string) map[string]string {
 	}
 	return out
 }
-
-func ptr[T any](v T) *T {
-	return &v
-}

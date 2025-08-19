@@ -39,6 +39,10 @@ func (s *Stats) RecordBlock(block bstream.BlockRef) {
 	s.lastBlock = block
 }
 
+func (s *Stats) AverageFlushDuration() time.Duration {
+	return s.dbFlushAvgDuration.Average()
+}
+
 func (s *Stats) RecordFlushDuration(duration time.Duration) {
 	s.dbFlushAvgDuration.AddDuration(duration)
 }
@@ -73,7 +77,6 @@ func (s *Stats) LogNow() {
 	s.logger.Info("postgres sink stats",
 		zap.Stringer("db_flush_rate", s.dbFlushRate),
 		zap.Stringer("db_flush_duration_rate", s.dbFlushAvgDuration),
-		zap.Uint64("flushed_rows", s.flushedRows.ValueUint()),
 		zap.Stringer("db_flushed_rows_rate", s.dbFlushedRowsRate),
 		zap.Stringer("last_block", s.lastBlock),
 	)

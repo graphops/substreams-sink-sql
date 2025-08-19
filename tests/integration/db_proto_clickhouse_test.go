@@ -21,8 +21,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/clickhouse"
 )
 
-const defaultOutputModuleName = "map_output"
-
 func TestDbProtoClickhouseIntegration(t *testing.T) {
 	outputMessageDescriptor := (*pbrelations.Output)(nil).ProtoReflect().Descriptor()
 
@@ -34,6 +32,12 @@ func TestDbProtoClickhouseIntegration(t *testing.T) {
 
 	streamMock := func(responses ...*pbsubstreamsrpc.Response) []*pbsubstreamsrpc.Response {
 		return responses
+	}
+
+	equalsOrderRows := func(expected []*OrderRow) func(t *testing.T, dbx *sqlx.DB) {
+		return func(t *testing.T, dbx *sqlx.DB) {
+			require.Equal(t, expected, readRowsBy[OrderRow](t, dbx, "orders", "order_id"))
+		}
 	}
 
 	testCases := []struct {
@@ -48,11 +52,9 @@ func TestDbProtoClickhouseIntegration(t *testing.T) {
 					entityOrder("o1", "c1", orderItem("i1", 2), orderItem("i2", 3)),
 				),
 			),
-			func(t *testing.T, db *sqlx.DB) {
-				require.Equal(t, []*OrderRow{
-					{rowMeta(t, 1, "2025-01-01"), "o1", "c1"},
-				}, readOrders(t, db))
-			},
+			equalsOrderRows([]*OrderRow{
+				{rowMeta(t, 1, "2025-01-01"), "o1", "c1"},
+			}),
 		},
 		{
 			"two orders",
@@ -62,12 +64,10 @@ func TestDbProtoClickhouseIntegration(t *testing.T) {
 					entityOrder("o2", "c2", orderItem("i3", 1), orderItem("i4", 4)),
 				),
 			),
-			func(t *testing.T, db *sqlx.DB) {
-				require.Equal(t, []*OrderRow{
-					{rowMeta(t, 1, "2025-01-01"), "o1", "c1"},
-					{rowMeta(t, 1, "2025-01-01"), "o2", "c2"},
-				}, readOrders(t, db))
-			},
+			equalsOrderRows([]*OrderRow{
+				{rowMeta(t, 1, "2025-01-01"), "o1", "c1"},
+				{rowMeta(t, 1, "2025-01-01"), "o2", "c2"},
+			}),
 		},
 	}
 
@@ -77,9 +77,13 @@ func TestDbProtoClickhouseIntegration(t *testing.T) {
 			// activating t.Parallel() leads to queries getting "rows" from different tests and I'm not sure why.
 			// Database shows weirdly at the end correct results, need to be investigated.
 
-			substreamsClientConfig := setupFakeSubstreamsServer(t, tc.responses...)
-
+			pattern := make([]interface{}, len(tc.responses))
+			for i, resp := range tc.responses {
+				pattern[i] = resp
+			}
+			substreamsClientConfig := setupFakeSubstreamsServer(t, pattern...)
 			substreamsPackage := substreamsTestPackage(pbrelations.File_test_relations_relations_proto, outputMessageDescriptor)
+
 			baseSink, err := sink.New(
 				sink.SubstreamsModeProduction,
 				false,
@@ -162,7 +166,7 @@ func relationsBlockData(t *testing.T, blockIdentifier string, blockTimeRaw strin
 
 	output := &pbrelations.Output{Entities: entities}
 
-	return blockScopedData(t, blockIdentifier, output, blockTime(t, blockTimeRaw))
+	return blockScopedData(t, blockIdentifier, output, blockTimepb(t, blockTimeRaw))
 }
 
 // entityCustomer creates a Customer entity with the given ID and name
@@ -216,16 +220,6 @@ type BlockRow struct {
 	Timestamp time.Time `db:"timestamp"`
 }
 
-func readBlocks(t *testing.T, db *sqlx.DB) []*BlockRow {
-	t.Helper()
-
-	var blocks []*BlockRow
-	err := db.SelectContext(context.Background(), &blocks, `SELECT * FROM test_schema.blocks ORDER BY number`)
-	require.NoError(t, err)
-
-	return blocks
-}
-
 type Meta struct {
 	IsDeleted   bool      `db:"_deleted_"`
 	BlockNumber uint64    `db:"_block_number_"`
@@ -238,7 +232,7 @@ func rowMeta(t *testing.T, blockNum uint, blockTimeRaw string) Meta {
 	return Meta{
 		IsDeleted:   false,
 		BlockNumber: uint64(blockNum),
-		BlockTime:   blockTime(t, blockTimeRaw).AsTime(),
+		BlockTime:   blockTime(t, blockTimeRaw),
 	}
 }
 
@@ -246,14 +240,4 @@ type OrderRow struct {
 	Meta
 	OrderID    string `db:"order_id"`
 	CustomerID string `db:"customer_ref_id"`
-}
-
-func readOrders(t *testing.T, db *sqlx.DB) []*OrderRow {
-	t.Helper()
-
-	var orders []*OrderRow
-	err := db.SelectContext(context.Background(), &orders, `SELECT * FROM orders ORDER BY order_id`)
-	require.NoError(t, err)
-
-	return orders
 }
