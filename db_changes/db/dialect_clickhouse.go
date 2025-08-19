@@ -104,15 +104,20 @@ func (d ClickhouseDialect) GetCreateCursorQuery(schema string, withPostgraphile 
 		engine = "ReplicatedReplacingMergeTree()"
 	}
 
+	tableName := d.cursorTableName
+	if schema != "" {
+		tableName = EscapeIdentifier(schema) + "." + EscapeIdentifier(d.cursorTableName)
+	}
+
 	return fmt.Sprintf(cli.Dedent(`
-	CREATE TABLE IF NOT EXISTS %s.%s %s
+	CREATE TABLE IF NOT EXISTS %s %s
 	(
     id         String,
 		cursor     String,
 		block_num  Int64,
 		block_id   String
 	) Engine = %s ORDER BY id;
-	`), EscapeIdentifier(schema), EscapeIdentifier(d.cursorTableName), clusterClause, engine)
+	`), tableName, clusterClause, engine)
 }
 
 func (d ClickhouseDialect) GetCreateHistoryQuery(schema string, withPostgraphile bool) string {
