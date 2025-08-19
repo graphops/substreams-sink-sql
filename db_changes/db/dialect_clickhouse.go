@@ -170,9 +170,24 @@ func (d ClickhouseDialect) ExecuteSetupScript(ctx context.Context, l *Loader, sc
 		}
 	} else {
 		for _, query := range strings.Split(schemaSql, ";") {
-			if len(strings.TrimSpace(query)) == 0 {
+			query = strings.TrimSpace(query)
+			if len(query) == 0 {
 				continue
 			}
+
+			// Add ENGINE clause to CREATE TABLE statements that don't have one
+			if strings.HasPrefix(strings.ToUpper(query), "CREATE TABLE") && 
+			   !strings.Contains(strings.ToUpper(query), "ENGINE") {
+				// Choose appropriate engine based on cluster setting
+				engine := "ReplacingMergeTree()"
+				if d.cluster != "" {
+					engine = "ReplicatedReplacingMergeTree()"
+				}
+				
+				// Insert ENGINE clause after the table definition
+				query = query + " ENGINE = " + engine
+			}
+
 			if _, err := l.ExecContext(ctx, query); err != nil {
 				return fmt.Errorf("exec schemaName: %w", err)
 			}
