@@ -685,6 +685,8 @@ func TestCompleteIntegration(t *testing.T) {
 var logger = zap.NewNop()
 
 // createSimpleFieldDescriptor creates a basic field descriptor for testing
+var testFDSeq int
+
 func createSimpleFieldDescriptor(name string, fieldType descriptor.FieldDescriptorProto_Type) *desc.FieldDescriptor {
 	fdp := &descriptor.FieldDescriptorProto{
 		Name:   &name,
@@ -697,7 +699,8 @@ func createSimpleFieldDescriptor(name string, fieldType descriptor.FieldDescript
 		Field: []*descriptor.FieldDescriptorProto{fdp},
 	}
 
-	fileName := "test.proto"
+    testFDSeq++
+    fileName := fmt.Sprintf("test_%s_%d.proto", name, testFDSeq)
 	fdProto := &descriptor.FileDescriptorProto{
 		Name:        &fileName,
 		MessageType: []*descriptor.DescriptorProto{mdp},

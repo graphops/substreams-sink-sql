@@ -227,14 +227,17 @@ func tableName(schemaName string, tableName string) string {
 }
 
 func orderByString(table *schema.Table) (string, error) {
-	info := table.PbTableInfo.ClickhouseTableOptions
-	if info == nil {
-		// Default to ordering by primary key if available, otherwise by block_number
-		if table.PrimaryKey != nil {
-			return fmt.Sprintf("ORDER BY (%s)", table.PrimaryKey.Name), nil
-		}
-		return fmt.Sprintf("ORDER BY (%s)", sql2.DialectFieldBlockNumber), nil
-	}
+    var info *pbSchema.ClickhouseTableOptions
+    if table.PbTableInfo != nil {
+        info = table.PbTableInfo.ClickhouseTableOptions
+    }
+    if info == nil {
+        // Default to ordering by primary key if available, otherwise by block_number
+        if table.PrimaryKey != nil {
+            return fmt.Sprintf("ORDER BY (%s)", table.PrimaryKey.Name), nil
+        }
+        return fmt.Sprintf("ORDER BY (%s)", sql2.DialectFieldBlockNumber), nil
+    }
 
 	if len(info.OrderByFields) == 0 {
 		return "", fmt.Errorf("clickhouse table options for table %q don't have any 'order_by_fields'. Require at least 1", table.Name)
@@ -256,11 +259,14 @@ func orderByString(table *schema.Table) (string, error) {
 }
 
 func partitionByString(table *schema.Table) (string, error) {
-	info := table.PbTableInfo.ClickhouseTableOptions
-	if info == nil {
-		// Default to partitioning by month based on block timestamp
-		return fmt.Sprintf("PARTITION BY (%s)", wrapWithClickhouseFunction(sql2.DialectFieldBlockTimestamp, pbSchema.Function_toYYYYMM)), nil
-	}
+    var info *pbSchema.ClickhouseTableOptions
+    if table.PbTableInfo != nil {
+        info = table.PbTableInfo.ClickhouseTableOptions
+    }
+    if info == nil {
+        // Default to partitioning by month based on block timestamp
+        return fmt.Sprintf("PARTITION BY (%s)", wrapWithClickhouseFunction(sql2.DialectFieldBlockTimestamp, pbSchema.Function_toYYYYMM)), nil
+    }
 
 	var parts []string
 
@@ -288,11 +294,14 @@ func partitionByString(table *schema.Table) (string, error) {
 }
 
 func replacingMergeTreeString(table *schema.Table) (string, error) {
-	info := table.PbTableInfo.ClickhouseTableOptions
-	if info == nil {
-		// Default to just using version field when no ClickHouse options are set
-		return fmt.Sprintf("ReplacingMergeTree(%s)", sql2.DialectFieldVersion), nil
-	}
+    var info *pbSchema.ClickhouseTableOptions
+    if table.PbTableInfo != nil {
+        info = table.PbTableInfo.ClickhouseTableOptions
+    }
+    if info == nil {
+        // Default to just using version field when no ClickHouse options are set
+        return fmt.Sprintf("ReplacingMergeTree(%s)", sql2.DialectFieldVersion), nil
+    }
 
 	out := sql2.DialectFieldVersion
 	for _, field := range info.ReplacingFields {
