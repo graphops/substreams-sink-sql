@@ -70,7 +70,8 @@ var fromProtoGenerateCsvCmd = Command(fromProtoGenerateCsvE,
 		flags.Uint64("bundle-size", 10000, "Size of output bundle, in blocks")
 		flags.String("working-dir", "./workdir", "Working directory")
 		flags.Uint64("buffer-max-size", 4*1024*1024, "Memory buffer size for CSV writing")
-		flags.String("cursors-table", "cursors", "Name of the cursors table")
+    // from-proto compatibility: DB uses fixed table name _cursor_
+    flags.String("cursors-table", "_cursor_", "Name of the cursors table (from-proto compatibility)")
 	}),
 )
 
@@ -308,7 +309,7 @@ func fromProtoGenerateCsvE(cmd *cobra.Command, args []string) error {
 
 // exportSQLSchema exports the exact SQL DDL that from-proto would execute
 func exportSQLSchema(dialect sql.Dialect, sqlSchema *schema.Schema, useConstraints bool, driver, outputPath string) error {
-	var statements []string
+    var statements []string
 
 	// Add static SQL (system tables)
 	staticSQL := getStaticSQL(driver, sqlSchema.Name)
@@ -336,32 +337,39 @@ func exportSQLSchema(dialect sql.Dialect, sqlSchema *schema.Schema, useConstrain
 	}
 	sort.Strings(tableNames)
 
-	for _, tableName := range tableNames {
-		createSQL := baseDialect.CreateTableSql[tableName]
-		statements = append(statements, createSQL)
-	}
+    for _, tableName := range tableNames {
+        createSQL := baseDialect.CreateTableSql[tableName]
+        statements = append(statements, createSQL)
+    }
 
-	// Add constraints if enabled
-	if useConstraints {
-		// Primary keys
-		for _, constraint := range baseDialect.PrimaryKeySql {
-			statements = append(statements, constraint.Sql)
-		}
+    // Add constraints if enabled
+    if useConstraints {
+        // Primary keys
+        for _, constraint := range baseDialect.PrimaryKeySql {
+            statements = append(statements, constraint.Sql)
+        }
 
-		// Unique constraints
-		for _, constraint := range baseDialect.UniqueConstraintSql {
-			statements = append(statements, constraint.Sql)
-		}
+        // Unique constraints
+        for _, constraint := range baseDialect.UniqueConstraintSql {
+            statements = append(statements, constraint.Sql)
+        }
 
-		// Foreign keys
-		for _, constraint := range baseDialect.ForeignKeySql {
-			statements = append(statements, constraint.Sql)
-		}
-	}
+        // Foreign keys
+        for _, constraint := range baseDialect.ForeignKeySql {
+            statements = append(statements, constraint.Sql)
+        }
+    }
+
+    // Seed sink info so from-proto can start without error
+    switch driver {
+    case "postgres", "risingwave":
+        seed := fmt.Sprintf("INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) VALUES ('%s') ON CONFLICT (schema_hash) DO NOTHING;", sqlSchema.Name, dialect.SchemaHash())
+        statements = append(statements, seed)
+    }
 
 	// Write to file
-	content := strings.Join(statements, "\n\n") + "\n"
-	return os.WriteFile(outputPath, []byte(content), 0644)
+    content := strings.Join(statements, "\n\n") + "\n"
+    return os.WriteFile(outputPath, []byte(content), 0644)
 }
 
 // getStaticSQL returns the static SQL for system tables
@@ -769,6 +777,15 @@ func (g *protoAwareCSVGenerator) HandleBlockScopedData(ctx context.Context, data
 			continue
 		}
 
+
+		// Ensure header is written once per boundary
+		if !bundler.HeaderWritten {
+			if _, err := bundler.Writer().Write(bundler.Header); err != nil {
+				return fmt.Errorf("writing header for table %s: %w", tr.tableName, err)
+			}
+			bundler.HeaderWritten = true
+		}
+
 		for _, row := range tr.rows {
 			csvData := g.formatRowForCSV(row, table)
 			if _, err := bundler.Writer().Write(csvData); err != nil {
@@ -1117,19 +1134,12 @@ func (g *protoAwareCSVGenerator) close() {
 func (g *protoAwareCSVGenerator) HandleBlockRangeCompletion(ctx context.Context, cursor *sink.Cursor) error {
     g.logger.Info("substreams ended correctly, reached your stop block", zap.Stringer("last_block_seen", cursor.Block()))
 
-    // Write final cursor file like generate-csv (single file, sorted columns)
+    // Write final cursor file for from-proto compatibility: name,cursor
     if g.cursorsStore != nil {
         var buf bytes.Buffer
-        cols := []string{"block_id", "block_num", "cursor", "id"}
-        sort.Strings(cols)
-        buf.WriteString(strings.Join(cols, ","))
-        buf.WriteString("\n")
-
-        block := cursor.Block()
-        // Values must follow the same alphabetical order as columns
-        row := fmt.Sprintf("%s,%d,%s,%s\n", block.ID(), block.Num(), cursor, g.sink.OutputModuleHash())
+        buf.WriteString("name,cursor\n")
+        row := fmt.Sprintf("cursor,%s\n", cursor)
         buf.WriteString(row)
-
         if err := g.cursorsStore.WriteObject(ctx, lastCursorFilename, &buf); err != nil {
             return fmt.Errorf("write last cursor file: %w", err)
         }
