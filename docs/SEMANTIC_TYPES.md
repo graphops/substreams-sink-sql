@@ -1,36 +1,136 @@
-# Semantic Type Annotations for SQL Schema Generation
+# Protobuf Annotations Used by from-proto
 
 ## Overview
 
-The semantic type annotation system allows you to specify high-level semantic meanings for protobuf fields that get automatically mapped to optimal SQL types for each database dialect. This enables support for specialized types like RisingWave's `rw_int256` while maintaining compatibility across PostgreSQL, RisingWave, and ClickHouse.
+The from-proto path derives your SQL schema directly from protobuf descriptors. It recognizes a set of annotations that control table/column naming, relationships, constraints, dialect-specific table options, and semantic typing of fields.
 
-## Quick Start
+When the package includes `sf/substreams/sink/sql/schema/v1/schema.proto`, from-proto honors these annotations (useProtoOption enabled). Without it, from-proto falls back to best‑effort inference (table = message name; simple fields become columns; no explicit constraints unless added by the dialect for system integrity).
 
-1. Import the schema annotations in your protobuf:
+This document explains all supported annotations, how each dialect uses them, and why they matter.
+
+---
+
+## Message Options: table
+
+Import the annotations definition:
+
 ```protobuf
 import "sf/substreams/sink/sql/schema/v1/schema.proto";
 ```
 
-2. Add semantic type annotations to your fields:
+Annotate any message that should materialize as a table:
+
 ```protobuf
-message EthereumTransaction {
-  option (sf.substreams.sink.sql.schema.v1.table) = { name: "eth_transactions" };
-  
-  string hash = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+message Orders {
+  option (sf.substreams.sink.sql.schema.v1.table) = {
+    name: "orders"
+    child_of: "accounts on id"  // optional parent relation
+    clickhouse_table_options: {  // optional, ClickHouse only
+      order_by_fields: [{ name: "order_id" }]
+      partition_fields: [{ name: "_block_timestamp_", function: toYYYYMM }]
+      replacing_fields: [{ name: "order_id" }]
+      index_fields: [{ name: "idx_product", field_name: "product", type: set, granularity: 4 }]
+    }
+  };
+  ...
+}
+```
+
+Fields:
+- name: Required. The SQL table name.
+- child_of: Optional. Defines a parent/child relation: `"<parent_table> on <parent_pk_field>"`.
+  - Postgres: Adds a NOT NULL parent reference column to the child table plus a FK to the parent’s PK. Also every table gets a FK to `_blocks_` on `_block_number_` (ON DELETE CASCADE).
+  - RisingWave: Adds the parent reference column (no FK constraints; autocommit system).
+  - ClickHouse: Adds the parent reference column (no FK constraints; column used for modeling joins).
+- clickhouse_table_options: Optional, ClickHouse‑only. See “ClickHouse Table Options” below.
+
+Defaults when no table option is present:
+- With proto options (schema.proto present): messages without `(table)` are ignored (no table).
+- Without proto options: every message becomes a table named after the message.
+
+System columns added to every table:
+- `_block_number_` (all dialects) — tracks the originating block.
+- `_block_timestamp_` (all dialects).
+- `_version_`, `_deleted_` (ClickHouse only) — used by ReplacingMergeTree and retraction modeling.
+
+Primary keys when not specified explicitly:
+- Postgres: PK only if specified via column annotation; else no table PK (but FK to `_blocks_`).
+- RisingWave: If no explicit PK is set, a composite PK is created: `(_block_number_, <parent keys...>)` to preserve uniqueness in streaming mode.
+- ClickHouse: PRIMARY KEY/ORDER BY derived from ClickHouse options or defaults (see below).
+
+---
+
+## Field Options: column
+
+Annotate fields that should map to specific columns/constraints:
+
+```protobuf
+message Orders {
+  option (sf.substreams.sink.sql.schema.v1.table) = { name: "orders" };
+
+  string order_id = 1 [(sf.substreams.sink.sql.schema.v1.field) = {
+    name: "order_id",
     primary_key: true,
-    semantic_type: "hash"  // Optimized hash storage
+    unique: true,                         // adds uniqueness constraint (dialect-specific)
+    semantic_type: "hash",               // see Semantic Types below
+    format_hint: "hex"                   // optional value format hint
   }];
-  
-  string value = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
-    semantic_type: "uint256",  // Uses RisingWave's rw_int256
-    format_hint: "decimal"
-  }];
-  
-  string from_address = 3 [(sf.substreams.sink.sql.schema.v1.field) = {
-    semantic_type: "address"  // Blockchain address format
+
+  string account_id = 2 [(sf.substreams.sink.sql.schema.v1.field) = {
+    foreign_key: "accounts on id"        // FK to accounts(id) (Postgres only enforces)
   }];
 }
 ```
+
+Fields:
+- name: Optional. Overrides the SQL column name (default is the proto field name).
+- primary_key: Optional. Marks this column as the table’s primary key.
+  - Postgres: Adds a PK constraint.
+  - RisingWave: Declares an inline PK.
+  - ClickHouse: Used for defaults in ORDER BY/PRIMARY KEY where applicable.
+- unique: Optional. Enforces uniqueness.
+  - Postgres: Adds a unique constraint.
+  - RisingWave: Emits `UNIQUE` in column definition.
+  - ClickHouse: No native unique constraint — ignored (consider indexes).
+- foreign_key: Optional. Declares a FK to another table: `"<table> on <field>"`.
+  - Postgres: Adds a FK constraint to the referenced table/field.
+  - RisingWave/ClickHouse: Presence is validated for existence, but no constraint is created.
+- semantic_type, format_hint: Optional. See “Semantic Types & Format Hints”. Affects column type selection in each dialect. Value conversion helpers exist but are not applied automatically by from‑proto inserts (see “Runtime Conversion” below).
+
+---
+
+## ClickHouse Table Options
+
+ClickHouse engines need explicit ORDER/PARTITION configuration for good performance and correctness. The `clickhouse_table_options` block lets you control this per table.
+
+Fields (repeated lists):
+- order_by_fields: Required for CH. Defines the ORDER BY tuple. Each item supports:
+  - name: Column to order by (e.g., `_block_number_`, your PK, other fields).
+  - descending: Optional.
+  - function: Optional function wrapper (e.g., `toYYYYMM` for dates).
+- partition_fields: Optional additional partition keys. If none is provided, the dialect adds a default month partition on `_block_timestamp_`.
+- replacing_fields: Optional extra fields in `ReplacingMergeTree(version, <replacing_fields...>)` for conflict resolution.
+- index_fields: Optional skip indexes to accelerate predicates:
+  - name: Index name.
+  - field_name: Column to index.
+  - type: One of `minmax`, `set`, `ngrambf_v1`, `tokenbf_v1`, `bloom_filter`.
+  - granularity: Index granularity.
+  - function: Optional function wrapper.
+
+Defaults when options are omitted:
+- Engine: `ReplacingMergeTree(_version_)`.
+- PARTITION BY: `toYYYYMM(_block_timestamp_)`.
+- ORDER BY: if not provided, dialect defaults to PK or `_block_number_`.
+
+---
+
+## Semantic Types & Format Hints
+
+Semantic types give the dialect a clue to select the best storage type for a field (e.g., 256‑bit integers, addresses, hashes). Format hints help interpret the incoming literal representation when conversion is needed (hex vs decimal, etc.).
+
+Supported semantic types and their column type mappings:
+
+Note: If a semantic type is not supported by a dialect, the dialect falls back to its default mapping for the underlying protobuf type.
 
 ## Supported Semantic Types
 
@@ -63,9 +163,9 @@ message EthereumTransaction {
 | `unix_timestamp_ms` | Unix timestamp (milliseconds) | `TIMESTAMP WITH TIME ZONE` | `TIMESTAMP WITH TIME ZONE` | `DateTime64(3)` |
 | `block_timestamp` | Blockchain timestamp | `TIMESTAMP WITH TIME ZONE` | `TIMESTAMP WITH TIME ZONE` | `DateTime` |
 
-## Format Hints
+### Format Hints
 
-Format hints provide additional guidance for value conversion:
+Format hints provide additional guidance for value conversion (when conversions are used):
 
 | Format Hint | Description | Usage |
 |-------------|-------------|-------|
@@ -74,7 +174,19 @@ Format hints provide additional guidance for value conversion:
 | `base64` | Base64 format | For binary data encoded as base64 |
 | `string` | String format | Default string handling |
 
-## Complete Example
+---
+
+## Runtime Conversion (advanced)
+
+The codebase contains per‑dialect helpers to convert annotated values at insert time (e.g., converting `uint256` hex to a decimal literal for PostgreSQL, or casting to `rw_uint256` in RisingWave). Today, from‑proto uses prepared statements and passes values as they appear in your message — it does not automatically apply semantic conversions. The annotations primarily affect column type selection.
+
+Practical guidance:
+- Emit values in the “natural” format for your chosen dialect when possible (e.g., strings for `rw_uint256` or `NUMERIC`).
+- If you require strict conversions, adapt your Substreams output to provide appropriately typed/encoded values. The conversion helpers in `db_proto/sql/*/types.go` show how to transform values if you build a custom inserter.
+
+---
+
+## End‑to‑End Example (with annotations)
 
 ```protobuf
 syntax = "proto3";
