@@ -77,10 +77,10 @@ func TestFromProtoGenerateCSVCompatibility(t *testing.T) {
 	// Check for schema creation
 	assert.Contains(t, fullSQL, `CREATE SCHEMA IF NOT EXISTS "test_schema"`)
 
-	// Check for system tables
-	assert.Contains(t, fullSQL, `CREATE TABLE IF NOT EXISTS "test_schema"."_sink_info_"`)
-	assert.Contains(t, fullSQL, `CREATE TABLE IF NOT EXISTS "test_schema"."_cursor_"`)
-	assert.Contains(t, fullSQL, `CREATE TABLE IF NOT EXISTS "test_schema"."_blocks_"`)
+    // Check for system tables (match dialect static SQL, table names unquoted)
+    assert.Contains(t, fullSQL, `CREATE TABLE IF NOT EXISTS "test_schema"._sink_info_`)
+    assert.Contains(t, fullSQL, `CREATE TABLE IF NOT EXISTS "test_schema"._cursor_`)
+    assert.Contains(t, fullSQL, `CREATE TABLE IF NOT EXISTS "test_schema"._blocks_`)
 
 	// Check for user table with system columns
 	assert.Contains(t, fullSQL, `_block_number_ INTEGER NOT NULL`)
