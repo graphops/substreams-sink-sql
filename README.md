@@ -258,6 +258,7 @@ substreams-sink-sql generate-csv "risingwave://root:@localhost:4566/dev?schema=p
 > RisingWave's streaming architecture makes it particularly well-suited for high-throughput injection scenarios. Its append-optimized design can handle large CSV imports efficiently while maintaining real-time query performance.
 
 > [!NOTE]
+
 > We are using 14490000 as our stop block, pick you stop block close to chain's HEAD or smaller like us to perform an experiment, adjust to your needs.
 
 This will generate block segmented CSV files for each table in your schema inside the folder `./data/tables`. Next step is to actually inject those CSV files into your database. You can use `psql` and inject directly with it.
@@ -312,3 +313,23 @@ When choosing this value you should consider 2 things:
 - Amount of RAM you want to allocate.
 
 Let's take a container that is going to have 8 GiB of RAM. We suggest leaving 512 MiB for other part of the `generate-csv` tasks, which mean we could dedicated 7.488 GiB to buffering. If your schema has 10 tables, you should use `--buffer-max-size=785173709` (`7.488 GiB / 10 = 748.8 MiB = 785173709`).
+
+### Ingestion Modes
+
+This sink supports two primary ingestion modes tailored to different data contracts and operational needs:
+
+- run: Consumes DatabaseChanges and applies CRUD operations against an existing schema (created via `setup`). Uses system tables `cursors` and `substreams_history` for cursoring and optional reorg handling. Best when your module emits DatabaseChanges and you want tight DB control. See flags `--batch-block-flush-interval`, `--batch-row-flush-interval`, `--live-block-flush-interval`.
+
+- from-proto: Consumes a typed protobuf message (from your output module), derives and manages schema automatically, and inserts entities in relational tables. Uses `_cursor_`, `_blocks_`, and `_sink_info_`. Great for greenfield ingestion or when you want schema derived from your protos.
+
+Key behaviors and recommendations:
+
+- Finalization (from-proto): Any outstanding partial batch flushes when the requested range completes; the final cursor is stored.
+- Live + constraints: Live streaming works with or without constraints. For heavy backfills, prefer `--no-constraints` for speed, then use constraints for live integrity if needed.
+- Reorg handling (run): `--undo-buffer-size` controls strategy. Non-zero buffers blocks (disables DB-level reorgs near head); zero enables DB-level reorgs (where supported).
+- Mode handoff: `run` and `from-proto` maintain different system tables by design. If you backfilled with `from-proto`, continue live with `from-proto` to reuse `_cursor_`/`_blocks_`. Switching to `run` directly will not reuse the same cursor tables and may require a migration.
+
+See also:
+
+- docs/FROM_PROTO.md — full from-proto reference (flags, schema, live/reorgs).
+- docs/FROM_PROTO_GENERATE_CSV_README.md — CSV backfill aligned to from-proto.

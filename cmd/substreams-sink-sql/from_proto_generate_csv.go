@@ -268,6 +268,8 @@ func fromProtoGenerateCsvE(cmd *cobra.Command, args []string) error {
 		blockRange,
 		zlog,
 		tracer,
+		// We only generate CSVs from final blocks; undos are not applied in this mode
+		sink.WithFinalBlocksOnly(),
 	)
 	if err != nil {
 		return fmt.Errorf("new base sinker: %w", err)
@@ -374,69 +376,64 @@ func exportSQLSchema(dialect sql.Dialect, sqlSchema *schema.Schema, useConstrain
 
 // getStaticSQL returns the static SQL for system tables
 func getStaticSQL(driver, schemaName string) string {
-	switch driver {
-	case "postgres":
-		return fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s";
+    switch driver {
+    case "postgres":
+        // Matches db_proto/sql/postgres/dialect.go postgresStaticSql
+        return fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s";
 
-CREATE TABLE IF NOT EXISTS "%s"."_sink_info_" (
-	schema_hash TEXT PRIMARY KEY
+CREATE TABLE IF NOT EXISTS "%s"._sink_info_ (
+    schema_hash TEXT PRIMARY KEY
 );
 
-CREATE TABLE IF NOT EXISTS "%s"."_cursor_" (
-	name TEXT PRIMARY KEY,
-	cursor TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
+    name TEXT PRIMARY KEY,
+    cursor TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS "%s"."_blocks_" (
-	number integer,
-	hash TEXT NOT NULL,
-	timestamp TIMESTAMP NOT NULL
+CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
+    number integer,
+    hash TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL
 );`, schemaName, schemaName, schemaName, schemaName)
 
-	case "risingwave":
-		// RisingWave uses similar structure to PostgreSQL
-		return fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s";
+    case "risingwave":
+        // Matches db_proto/sql/risingwave/dialect.go risingwaveStaticSql
+        return fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s";
 
-CREATE TABLE IF NOT EXISTS "%s"."_sink_info_" (
-	schema_hash TEXT PRIMARY KEY
+CREATE TABLE IF NOT EXISTS "%s"._sink_info_ (
+    schema_hash VARCHAR PRIMARY KEY
 );
 
-CREATE TABLE IF NOT EXISTS "%s"."_cursor_" (
-	name TEXT PRIMARY KEY,
-	cursor TEXT NOT NULL
-);
+CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
+    name VARCHAR PRIMARY KEY,
+    cursor VARCHAR
+) ON CONFLICT OVERWRITE;
 
-CREATE TABLE IF NOT EXISTS "%s"."_blocks_" (
-	number integer,
-	hash TEXT NOT NULL,
-	timestamp TIMESTAMP NOT NULL
+CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
+    number INTEGER PRIMARY KEY,
+    hash VARCHAR,
+    timestamp TIMESTAMP WITH TIME ZONE
 );`, schemaName, schemaName, schemaName, schemaName)
 
-	case "clickhouse":
-		// ClickHouse has different syntax
-		return fmt.Sprintf(`CREATE DATABASE IF NOT EXISTS %s;
+    case "clickhouse":
+        // Matches db_proto/sql/click_house/dialect.go staticSqlCreatDatabase + staticSqlCreateBlock
+        return fmt.Sprintf(`CREATE DATABASE IF NOT EXISTS %s;
 
-CREATE TABLE IF NOT EXISTS %s._sink_info_ (
-	schema_hash String
-) ENGINE = MergeTree()
-ORDER BY schema_hash;
+CREATE TABLE IF NOT EXISTS %s._blocks_  (
+    number    UInt64,
+    hash      text,
+    timestamp timestamp,
+    version   Int64,
+    deleted   bool
+)
+ENGINE = ReplacingMergeTree(version)
+PARTITION BY (toYYYYMM(timestamp))
+PRIMARY KEY (number)
+ORDER BY (number);`, schemaName, schemaName)
 
-CREATE TABLE IF NOT EXISTS %s._cursor_ (
-	name String,
-	cursor String
-) ENGINE = MergeTree()
-ORDER BY name;
-
-CREATE TABLE IF NOT EXISTS %s._blocks_ (
-	number UInt32,
-	hash String,
-	timestamp DateTime
-) ENGINE = MergeTree()
-ORDER BY number;`, schemaName, schemaName, schemaName, schemaName)
-
-	default:
-		return ""
-	}
+    default:
+        return ""
+    }
 }
 
 // SchemaMetadata represents the exported schema metadata
@@ -476,36 +473,26 @@ func exportSchemaMetadata(sqlSchema *schema.Schema, dialect sql.Dialect, driver 
 		Tables:      []TableMetadata{},
 	}
 
-	// Export table metadata
-	for _, table := range dialect.GetTables() {
-		tm := TableMetadata{
-			Name:        table.Name,
-			Columns:     []ColumnMetadata{},
-			ColumnOrder: []string{},
-		}
+    // Export table metadata
+    for _, table := range dialect.GetTables() {
+        tm := TableMetadata{
+            Name:        table.Name,
+            Columns:     []ColumnMetadata{},
+            ColumnOrder: []string{},
+        }
 
-		// Always add system columns first
-		tm.ColumnOrder = append(tm.ColumnOrder, sql.DialectFieldBlockNumber)
-		tm.ColumnOrder = append(tm.ColumnOrder, sql.DialectFieldBlockTimestamp)
+        // Column order must exactly match CSV generation order
+        tm.ColumnOrder = computeCSVColumnOrder(table, dialect)
 
-		// Add version/deleted fields if dialect uses them
-		if dialect.UseVersionField() {
-			tm.ColumnOrder = append(tm.ColumnOrder, sql.DialectFieldVersion)
-		}
-		if dialect.UseDeletedField() {
-			tm.ColumnOrder = append(tm.ColumnOrder, sql.DialectFieldDeleted)
-		}
-
-		// Add table columns
-		for i, col := range table.Columns {
-			tm.ColumnOrder = append(tm.ColumnOrder, col.Name)
-			tm.Columns = append(tm.Columns, ColumnMetadata{
-				Name:     col.Name,
-				SQLType:  getColumnSQLType(col, dialect, driver),
-				Position: i,
-				Nullable: true, // Allow nulls for CSV data
-			})
-		}
+        // Describe all physical columns (excluding system columns) for metadata
+        for i, col := range table.Columns {
+            tm.Columns = append(tm.Columns, ColumnMetadata{
+                Name:     col.Name,
+                SQLType:  getColumnSQLType(col, dialect, driver),
+                Position: i,
+                Nullable: true,
+            })
+        }
 
 		if table.PrimaryKey != nil {
 			tm.PrimaryKey = &table.PrimaryKey.Name
@@ -521,6 +508,36 @@ func exportSchemaMetadata(sqlSchema *schema.Schema, dialect sql.Dialect, driver 
 	}
 
 	return os.WriteFile(outputPath, data, 0644)
+}
+
+// computeCSVColumnOrder returns the exact CSV column order for a table
+func computeCSVColumnOrder(table *schema.Table, dialect sql.Dialect) []string {
+    var cols []string
+    cols = append(cols, sql.DialectFieldBlockNumber)
+    cols = append(cols, sql.DialectFieldBlockTimestamp)
+    if dialect.UseVersionField() {
+        cols = append(cols, sql.DialectFieldVersion)
+    }
+    if dialect.UseDeletedField() {
+        cols = append(cols, sql.DialectFieldDeleted)
+    }
+    if table.PrimaryKey != nil {
+        cols = append(cols, table.PrimaryKey.Name)
+    }
+    if table.ChildOf != nil {
+        cols = append(cols, table.ChildOf.ParentTableField)
+    }
+    for _, c := range table.Columns {
+        // Skip duplicates already added
+        if table.PrimaryKey != nil && c.Name == table.PrimaryKey.Name {
+            continue
+        }
+        if table.ChildOf != nil && c.Name == table.ChildOf.ParentTableField {
+            continue
+        }
+        cols = append(cols, c.Name)
+    }
+    return cols
 }
 
 // getColumnSQLType gets the SQL type for a column
@@ -844,19 +861,21 @@ func (g *protoAwareCSVGenerator) walkMessageAndCollectRows(dm *dynamic.Message, 
 		primaryKeyOffset += 1
 	}
 
-	primaryKey := ""
-	if tableInfo != nil {
-		if table := g.dialect.GetTable(tableInfo.Name); table != nil {
-			if table.PrimaryKey != nil {
-				primaryKey = table.PrimaryKey.Name
-				pkValue := dm.GetFieldByName(primaryKey)
-				if pkValue == nil {
-					return nil, fmt.Errorf("missing primary key field %q for table %q", primaryKey, tableInfo.Name)
-				}
-				fieldValues = append(fieldValues, pkValue)
-			}
-		}
-	}
+    primaryKey := ""
+    if tableInfo != nil {
+        if table := g.dialect.GetTable(tableInfo.Name); table != nil {
+            if table.PrimaryKey != nil {
+                primaryKey = table.PrimaryKey.Name
+                // Fetch PK value using the protobuf field name, not the SQL column name
+                pkFieldName := table.PrimaryKey.FieldDescriptor.GetName()
+                pkValue := dm.GetFieldByName(pkFieldName)
+                if pkValue == nil {
+                    return nil, fmt.Errorf("missing primary key field %q for table %q", pkFieldName, tableInfo.Name)
+                }
+                fieldValues = append(fieldValues, pkValue)
+            }
+        }
+    }
 
 	if parent != nil {
 		fieldValues = append(fieldValues, parent.id)
@@ -885,31 +904,49 @@ func (g *protoAwareCSVGenerator) walkMessageAndCollectRows(dm *dynamic.Message, 
 		fieldNames = append(fieldNames, "") // Placeholder, will be updated later
 	}
 
-	// Walk all known fields
-	for _, fd := range dm.GetKnownFields() {
-		if fd.GetName() == primaryKey {
-			continue
-		}
-		fv := dm.GetField(fd)
-		if v, ok := fv.([]interface{}); ok {
-			// Repeated field - handle child messages
-			for _, c := range v {
-				fm, ok := c.(*dynamic.Message)
-				if !ok {
-					return nil, fmt.Errorf("Repeated fields with native values not supported yet in 'from-proto' mode. message %q, field %q", md.GetFullyQualifiedName(), fd.GetName())
-				}
-				childs = append(childs, fm)
-			}
-		} else if fm, ok := fv.(*dynamic.Message); ok {
-			if fm == nil {
-				continue //un-used oneOf field
-			}
-			childs = append(childs, fm) //need to be handled after current message inserted
-		} else {
-			fieldValues = append(fieldValues, fv)
-			fieldNames = append(fieldNames, fd.GetName())
-		}
-	}
+    // Walk all known fields
+    for _, fd := range dm.GetKnownFields() {
+        // Skip PK field by descriptor equality to handle renamed columns
+        if tableInfo != nil {
+            if tbl := g.dialect.GetTable(tableInfo.Name); tbl != nil && tbl.PrimaryKey != nil {
+                if fd == tbl.PrimaryKey.FieldDescriptor {
+                    continue
+                }
+            }
+        }
+
+        fv := dm.GetField(fd)
+        if v, ok := fv.([]interface{}); ok {
+            // Repeated field - handle child messages
+            for _, c := range v {
+                fm, ok := c.(*dynamic.Message)
+                if !ok {
+                    return nil, fmt.Errorf("Repeated fields with native values not supported yet in 'from-proto' mode. message %q, field %q", md.GetFullyQualifiedName(), fd.GetName())
+                }
+                childs = append(childs, fm)
+            }
+        } else if fm, ok := fv.(*dynamic.Message); ok {
+            if fm == nil {
+                continue //un-used oneOf field
+            }
+            childs = append(childs, fm) //need to be handled after current message inserted
+        } else {
+            fieldValues = append(fieldValues, fv)
+            // Map to actual SQL column name if proto option renamed it
+            colName := fd.GetName()
+            if tableInfo != nil {
+                if tbl := g.dialect.GetTable(tableInfo.Name); tbl != nil {
+                    for _, c := range tbl.Columns {
+                        if c.FieldDescriptor == fd {
+                            colName = c.Name
+                            break
+                        }
+                    }
+                }
+            }
+            fieldNames = append(fieldNames, colName)
+        }
+    }
 
 	var p *Parent
 

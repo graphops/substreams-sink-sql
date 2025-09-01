@@ -83,11 +83,10 @@ type Holder struct {
 var holding []*Holder
 
 func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrpc.BlockScopedData, isLive *bool, cursor *sink.Cursor) (err error) {
-	if (isLive != nil && *isLive) && s.useConstraints {
-		return fmt.Errorf("live mode is not supported without constraints")
-	}
+    // Live mode is supported with or without constraints. If constraints are enabled,
+    // performance might be lower depending on workload and schema complexity.
 
-	startAt := time.Now()
+    startAt := time.Now()
 	defer func() {
 		s.stats.LastBlockProcessAt = time.Now()
 		s.stats.BlockProcessingDuration.Add(time.Since(startAt))
@@ -193,6 +192,81 @@ func (s *Sinker) HandleBlockScopedData(ctx context.Context, data *pbsubstreamsrp
 	}
 
 	return nil
+}
+
+// HandleBlockRangeCompletion flushes any outstanding partial batch and stores
+// the final cursor when the requested range is completed.
+func (s *Sinker) HandleBlockRangeCompletion(ctx context.Context, cursor *sink.Cursor) error {
+    // Skip if we haven't actually reached the end of the requested range yet.
+    if !s.Sinker.BlockRange().ReachedEndBlock(cursor.Block().Num()) {
+        s.logger.Debug("range not completed yet, skipping",
+            zap.Stringer("block", cursor.Block()),
+            zap.Stringer("range", s.Sinker.BlockRange()),
+        )
+        return nil
+    }
+
+    if len(holding) == 0 {
+        // Nothing buffered, but still persist the cursor to mark completion.
+        if err := s.db.StoreCursor(cursor); err != nil {
+            return fmt.Errorf("storing cursor at completion: %w", err)
+        }
+        return nil
+    }
+
+    s.logger.Info("stream completed, flushing remaining data",
+        zap.Int("holders", len(holding)),
+        zap.Stringer("block", cursor.Block()),
+    )
+
+    // Use a transaction around the final batch when supported and not in parallel mode.
+    if s.useTransaction && !s.parallel {
+        if err := s.db.BeginTransaction(); err != nil {
+            return fmt.Errorf("begin tx on completion: %w", err)
+        }
+    }
+
+    // Process remaining holders sequentially (parallel finalization is not required here).
+    for _, h := range holding {
+        if err := s.processHolder(h, s.stats); err != nil {
+            if s.useTransaction && !s.parallel {
+                s.db.RollbackTransaction()
+            }
+            return fmt.Errorf("process holder on completion: %w", err)
+        }
+    }
+
+    flushDuration, err := s.db.Flush()
+    if err != nil {
+        if s.useTransaction && !s.parallel {
+            s.db.RollbackTransaction()
+        }
+        return fmt.Errorf("flush on completion: %w", err)
+    }
+
+    // Attribute the flush duration evenly to the buffered blocks for stats continuity.
+    if n := len(holding); n > 0 {
+        s.stats.FlushDuration.Add(flushDuration / time.Duration(n))
+    }
+
+    // Mark the last applied block to the cursor's block; persist final cursor.
+    s.lastAppliedBlockNum = cursor.Block().Num()
+    s.lastAppliedBlockTime = time.Now()
+    if err := s.db.StoreCursor(cursor); err != nil {
+        if s.useTransaction && !s.parallel {
+            s.db.RollbackTransaction()
+        }
+        return fmt.Errorf("storing cursor on completion: %w", err)
+    }
+
+    if s.useTransaction && !s.parallel {
+        if err := s.db.CommitTransaction(); err != nil {
+            return fmt.Errorf("commit tx on completion: %w", err)
+        }
+    }
+
+    holding = []*Holder{}
+    return nil
 }
 
 func (s *Sinker) processHolder(h *Holder, stats *stats.Stats) (err error) {

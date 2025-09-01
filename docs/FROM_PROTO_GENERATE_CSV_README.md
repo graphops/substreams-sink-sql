@@ -1,153 +1,140 @@
-# from-proto-generate-csv Mode Implementation
+# from-proto-generate-csv
 
 ## Overview
 
-The `from-proto-generate-csv` mode is a new command that generates SQL schema definitions and CSV data dumps that are 100% compatible with the `from-proto` mode. This allows operators to export schema and data for manual injection, ensuring perfect compatibility between historical backfill and live streaming.
+`from-proto-generate-csv` exports the exact SQL schema and data that `from-proto` would produce, but as files you can inspect and inject. It streams final blocks only. Use it to backfill history; then start `from-proto` to continue live streaming from the exported cursor.
 
-## Key Features
+## What It Produces
 
-### 1. Schema Generation
-- Reuses the EXACT same schema generation logic from `from-proto` mode
-- Exports complete SQL DDL statements instead of executing them
-- Supports all dialects: PostgreSQL, ClickHouse, RisingWave
-- Preserves all constraints, foreign keys, and indexes
+- `schema.sql`: DDL identical to `from-proto` (tables, types, constraints)
+- `schema.json`: Metadata (column order, types, schema hash)
+- `csv/<table>/<start>-<end>.csv`: Data files for each table, bundled by block range
+- `csv/_cursor_/last_cursor.csv`: Final cursor file compatible with `from-proto`’s `_cursor_` table
 
-### 2. CSV Data Export
-- Generates table-separated CSV files
-- Maintains exact column order expected by `from-proto`
-- System columns (`_block_number_`, `_block_timestamp_`) always first
-- Type-aware formatting for all SQL types
-- Bundle-based file organization for efficient loading
+Example layout:
 
-### 3. Schema Metadata
-- Exports JSON metadata file with complete schema information
-- Includes schema hash for validation
-- Documents column types and order
-- Enables compatibility verification
+```
+./csv-output/
+├── schema.sql
+├── schema.json
+├── orders/
+│   ├── 0000000000-0000010000.csv
+│   └── 0000010000-0000020000.csv
+├── order_items/
+│   └── 0000000000-0000010000.csv
+└── _cursor_/
+    └── last_cursor.csv
+```
 
 ## Usage
 
 ```bash
-# Export schema and generate CSV data
 substreams-sink-sql from-proto-generate-csv \
-    "postgres://localhost:5432/mydb" \
-    my-substreams.spkg \
-    0:1000000 \
-    --schema-output=./schema.sql \
-    --schema-metadata=./schema.json \
-    --output-dir=./csv-data \
-    --bundle-size=10000
+  "postgres://user:pass@localhost:5432/mydb?sslmode=disable" \
+  my-substreams.spkg \
+  [output-module] [start]:[stop] \
+  --schema-output=./schema.sql \
+  --schema-metadata=./schema.json \
+  --output-dir=./csv-output \
+  --working-dir=./workdir \
+  --bundle-size=10000 \
+  --buffer-max-size=$((128*1024*1024))
 ```
 
-## Output Structure
+Notes:
+- Streams final blocks only (undos are not applied in this mode).
+- If `--substreams-endpoint` is omitted, it is inferred from the manifest/network.
+- If `[start]:[stop]` is omitted, you can use `--start-block`/`--stop-block`.
+- Default `--cursors-table` is `_cursor_` to match `from-proto`.
 
+## CSV Details
+
+- Column order is exactly what `from-proto` inserts:
+  - `_block_number_`, `_block_timestamp_`, optional `_version_` and `_deleted_` (ClickHouse), primary key (if any), optional parent reference, then other fields in schema order.
+- Every CSV file includes a header row.
+- Files are bundled by block ranges; partial boundaries are flushed at completion so the last file is written.
+- Binary data is formatted COPY‑friendly for each dialect (e.g., `\xHEX` for PostgreSQL/RisingWave).
+
+## Cursor File
+
+- Path: `csv/_cursor_/last_cursor.csv`
+- Format:
+  - Header: `name,cursor`
+  - Row: `cursor,<blockNum>:<blockID>`
+- This is the only cursor artifact you need; it matches the DB schema of `_cursor_` used by `from-proto`.
+
+## Schema File
+
+- `schema.sql` is the exact DDL `from-proto` would execute.
+- For PostgreSQL/RisingWave, a line is appended to seed `_sink_info_` with the schema hash:
+  ```sql
+  INSERT INTO "<schema>"."_sink_info_" (schema_hash)
+  VALUES ('<hash>')
+  ON CONFLICT (schema_hash) DO NOTHING;
+  ```
+  This lets `from-proto` start without additional migrations.
+
+## End‑to‑End Workflow (PostgreSQL)
+
+1) Generate files
+```bash
+substreams-sink-sql from-proto-generate-csv \
+  "$PSQL_DSN" "$MANIFEST" "$MODULE" "$START:$STOP" \
+  --schema-output=./schema.sql \
+  --schema-metadata=./schema.json \
+  --output-dir=./csv-output
 ```
-output/
-├── schema.sql          # Complete DDL statements
-├── schema.json         # Schema metadata for validation
-├── orders/             # Table: orders
-│   ├── 0000000000-0000010000.csv
-│   ├── 0000010000-0000020000.csv
-│   └── ...
-├── order_items/        # Table: order_items
-│   ├── 0000000000-0000010000.csv
-│   └── ...
-└── cursors/            # System table
-    └── last_cursor.csv
+
+2) Apply schema
+```bash
+psql "$PSQL_DB" < ./schema.sql
 ```
 
-## Implementation Details
+3) Inject tables (can run in parallel)
+```bash
+for t in $(find ./csv-output -maxdepth 1 -type d -not -name "_cursor_" -not -path ./csv-output); do
+  table=$(basename "$t")
+  substreams-sink-sql inject-csv "$PSQL_DSN" ./csv-output "$table" "$START:$STOP"
+done
+```
 
-### Architecture Principle
-The implementation follows a simple but powerful principle: **reuse the exact schema generation code from from-proto mode**. This guarantees 100% compatibility.
+4) Inject cursor (last)
+```bash
+substreams-sink-sql inject-csv "$PSQL_DSN" ./csv-output "_cursor_" ":$STOP"
+```
 
-### Key Components
-
-1. **Command Structure** (`from_proto_generate_csv.go`)
-   - Parses protobuf definitions exactly like `from-proto`
-   - Creates schema using same `schema.NewSchema()` function
-   - Creates dialect using same constructors
-
-2. **SQL Exporter**
-   - Extracts DDL statements from dialect
-   - Preserves exact statement order
-   - Includes system tables and constraints
-
-3. **Proto-Aware CSV Generator**
-   - Implements `sink.SinkerHandler` interface
-   - Processes blocks using dynamic protobuf messages
-   - Formats values based on SQL types
-
-4. **Schema Metadata**
-   - Documents schema structure
-   - Provides validation information
-   - Enables compatibility checking
+5) Start live streaming (continues from the exported cursor)
+```bash
+substreams-sink-sql from-proto "$PSQL_DSN" "$MANIFEST" "$MODULE" \
+  --start-block=$STOP
+```
 
 ## Compatibility Guarantees
 
-### What's Guaranteed
-- Schema structure matches `from-proto` exactly
-- Column order preserved precisely
-- Type mappings identical to dialect specifications
-- Constraint definitions match completely
+- DDL/constraints: identical to `from-proto` (same generators)
+- Column order/types: identical to dialect implementation
+- Parent/child relationships: identical mapping
+- Cursor: compatible with `from-proto`’s `_cursor_` table (same header & row format)
 
-### What's Simplified (MVP)
-- Basic message traversal (single-level for now)
-- Simplified CSV encoding (proper escaping needed for production)
-- Limited test coverage (requires full protobuf setup)
+## Dialect Notes
 
-## Migration Workflow
+- PostgreSQL/RisingWave: `_sink_info_`, `_cursor_`, `_blocks_` tables are created in `schema.sql`. Cursor injection uses `COPY ... WITH (HEADER)`.
+- ClickHouse: CSVs include dialect-specific version/deleted fields. Schema.sql includes database and `_blocks_` table; cursor/sink info are not table-based — follow FROM_PROTO.md for CH specifics.
 
-```bash
-# Step 1: Export schema and historical data
-substreams-sink-sql from-proto-generate-csv \
-    $DSN $MANIFEST 0:1000000 \
-    --schema-output=./schema.sql \
-    --output-dir=./csv-data
+## Operational Tips
 
-# Step 2: Operator applies schema
-psql mydb < schema.sql
+- Increase `--buffer-max-size` to reduce local I/O when memory allows.
+- Choose `--bundle-size` to balance file count vs. parallel load throughput.
+- Ensure the `[start]:[stop]` you inject matches the bundles produced.
 
-# Step 3: Operator loads CSV data
-for table in csv-data/*/; do
-    psql mydb -c "COPY $table FROM '$table/*.csv' WITH CSV HEADER"
-done
+## Known Limitations
 
-# Step 4: Switch to live streaming
-substreams-sink-sql from-proto \
-    $DSN $MANIFEST \
-    --start-block=1000001
-```
+- `_blocks_` rows are not exported; `from-proto` will populate them live.
+- Reorgs/undos are not represented in backfilled CSV; use `from-proto` for live reorg handling.
+- ClickHouse injection is operator-managed; there is no built-in injector.
 
-## Future Enhancements
+## Rationale
 
-### Production Readiness
-1. **Full Message Traversal**: Handle nested messages and repeated fields
-2. **Robust CSV Encoding**: Proper escaping for all special characters
-3. **Comprehensive Testing**: Full test suite with real protobuf messages
-4. **Performance Optimization**: Parallel processing, streaming writes
-
-### Additional Features
-1. **Schema Validation**: Pre-export validation against existing database
-2. **Incremental Export**: Support for resumable exports
-3. **Data Verification**: Checksums and row count validation
-4. **Progress Tracking**: Real-time export progress monitoring
-
-## Technical Notes
-
-### Design Decisions
-1. **Reuse Over Reimplementation**: Uses existing schema generation to ensure compatibility
-2. **Export Over Execute**: Captures SQL for operator review and control
-3. **Metadata for Validation**: Enables verification without database connection
-4. **Dialect Agnostic**: Supports all SQL dialects through common interface
-
-### Known Limitations
-1. **Message Traversal**: Current implementation is simplified for MVP
-2. **Test Coverage**: Requires proper protobuf descriptor setup for full testing
-3. **Error Recovery**: Basic error handling, needs enhancement for production
-
-## Conclusion
-
-The `from-proto-generate-csv` mode successfully bridges the gap between protobuf schema definitions and bulk data loading. By reusing the exact schema generation logic from `from-proto`, it guarantees perfect compatibility while giving operators full control over the injection process.
-
-The implementation is clean, maintainable, and follows the principle of maximum code reuse to ensure consistency. While there are areas for enhancement (particularly around message traversal and testing), the core functionality is solid and ready for use.
+- We reuse the exact `from-proto` schema and field mapping logic to ensure 1:1 compatibility.
+- We emit files (instead of executing) to let operators review, sequence, and scale injection.
+- See also docs/FROM_PROTO.md for the live ingestion counterpart.
