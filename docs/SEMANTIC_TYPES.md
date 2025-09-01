@@ -165,14 +165,30 @@ Note: If a semantic type is not supported by a dialect, the dialect falls back t
 
 ### Format Hints
 
-Format hints provide additional guidance for value conversion (when conversions are used):
+Format hints provide additional guidance for value conversion. Important: in the default from-proto runtime, these hints do not change schema or insert behavior. They are metadata primarily for documentation and future/custom inserters. The built-in conversion helpers (see db_proto/sql/*/types.go) honor `hex`, but are not wired into from-proto’s insert path today.
 
-| Format Hint | Description | Usage |
-|-------------|-------------|-------|
-| `hex` | Hexadecimal format | For `uint256`, `int256` fields containing hex strings |
-| `decimal` | Decimal format | For numeric fields containing decimal strings |
-| `base64` | Base64 format | For binary data encoded as base64 |
-| `string` | String format | Default string handling |
+| Format Hint | Description | Effect in from-proto today |
+|-------------|-------------|----------------------------|
+| `hex` | Value is hexadecimal (optionally 0x-prefixed) | No effect by default; respected only by conversion helpers if explicitly used |
+| `decimal` | Value is base-10 decimal | No effect by default; serves as documentation/intent |
+| `base64` | Value is base64-encoded | No effect by default |
+| `string` | Treat value as plain string | No effect by default |
+
+format_hint: "decimal" — What it means today
+- Schema selection: none. Column type selection is driven by `semantic_type`, not by `format_hint`.
+- Insert semantics: none. The runtime passes your field value as-is to the database driver.
+- CSV export: none. Values are serialized as they appear in your message.
+- Practical use: declare that the field’s textual representation is base‑10 (not hex). This helps readers and future/custom inserters apply the right conversions.
+
+When to use format_hint: "decimal"
+- Use it for large integer semantic types (e.g., `uint256`, `int256`) when your Substreams output carries decimal strings and your target dialect stores them as a numeric type (Postgres `NUMERIC(78,0)`, RisingWave `rw_uint256`/`rw_int256`).
+- Omit it when storing in ClickHouse: the current mapping stores `uint256`/`int256` as `String`, so the hint has no effect.
+- Do not rely on it to convert hex to decimal automatically — conversion is not applied by default. Emit decimal strings from your Substreams if your destination column is numeric.
+
+Safety notes per dialect for `uint256`/`int256`
+- PostgreSQL: Mapped to `NUMERIC(78,0)`. Passing a hex string like `0x...` will fail to cast to numeric via prepared statements. Provide decimal strings (use `format_hint: "decimal"` to document intent), or implement a custom inserter that calls the dialect’s `ConvertSemanticValue` helper.
+- RisingWave: Mapped to `rw_uint256`/`rw_int256`. RisingWave accepts literals with explicit casts (e.g., `'123...'::rw_uint256`). from-proto does not add casts; ensure your values are accepted as-is by the server (decimal strings are the safest choice), or implement custom conversion.
+- ClickHouse: Currently mapped to `String` for maximum compatibility. `format_hint` has no effect; you can store either decimal or hex and cast at query time when needed. Native Decimal256 cannot represent the full uint256 range (max ~76 digits), so automatic Decimal mapping is intentionally avoided.
 
 ---
 
@@ -205,15 +221,17 @@ message EthereumTransaction {
     semantic_type: "hash"
   }];
   
-  // Large integers - uses rw_int256 in RisingWave
+  // Large integers (emit decimal strings). These map to
+  // NUMERIC(78,0) in Postgres and rw_uint256 in RisingWave.
   string value = 3 [(sf.substreams.sink.sql.schema.v1.field) = {
     semantic_type: "uint256",
     format_hint: "decimal"
   }];
   
+  // Gas price: also decimal in default from-proto (no automatic hex->decimal conversion)
   string gas_price = 4 [(sf.substreams.sink.sql.schema.v1.field) = {
     semantic_type: "uint256",
-    format_hint: "hex"
+    format_hint: "decimal"
   }];
   
   // Addresses - validated format
@@ -259,18 +277,18 @@ CREATE TABLE eth_transactions (
   gas_price rw_uint256,             -- uint256 → rw_uint256
   from_address CHARACTER VARYING,  -- address semantic type
   to_address CHARACTER VARYING,    -- address semantic type
-  token_amount rw_uint256,           -- uint256 semantic type
+  token_amount NUMERIC(78,0),        -- uint256 semantic type
   block_timestamp TIMESTAMP WITH TIME ZONE, -- unix_timestamp
   metadata JSONB,                   -- json semantic type
   trace_id CHARACTER VARYING       -- uuid semantic type
 );
 
--- Sample insert with rw_int256 casting
+-- Example insert if you craft SQL yourself (from-proto does not add casts)
 INSERT INTO eth_transactions VALUES (
   '0x1234...abcd',
   '0x5678...efab', 
   '115792089237316195423570985008687907853269984665640564039457584007913129639935'::rw_uint256,
-  '0x1bc16d674ec80000'::rw_uint256,
+  '20000000000'::rw_uint256,
   '0x742d35cc6636C0532925a3b8D0A3e5A5F2d5De8e',
   '0x8ba1f109551bD432803012645Hac136c5ae5c9e6',
   '1000123456789012345678'::rw_uint256,
@@ -289,7 +307,7 @@ CREATE TABLE eth_transactions (
   gas_price NUMERIC(78,0),          -- uint256 → NUMERIC fallback
   from_address CHAR(42),            -- address semantic type
   to_address CHAR(42),              -- address semantic type
-  token_amount rw_uint256,           -- uint256 semantic type
+  token_amount NUMERIC(78,0),        -- uint256 semantic type
   block_timestamp TIMESTAMP WITH TIME ZONE, -- unix_timestamp
   metadata JSONB,                   -- json semantic type
   trace_id UUID                     -- uuid → PostgreSQL UUID type
@@ -301,8 +319,8 @@ CREATE TABLE eth_transactions (
 CREATE TABLE eth_transactions (
   tx_hash FixedString(66),          -- hash semantic type
   block_hash FixedString(66),       -- hash semantic type
-  value String,                     -- uint256 → String (no native UInt256)  
-  gas_price String,                 -- uint256 → String (no native UInt256)
+  value String,                     -- uint256 stored as String (compatibility)
+  gas_price String,                 -- uint256 stored as String (compatibility)
   from_address FixedString(42),     -- address semantic type
   to_address FixedString(42),       -- address semantic type
   token_amount String,              -- uint256 semantic type
