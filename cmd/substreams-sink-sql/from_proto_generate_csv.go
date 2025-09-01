@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+    "sync"
 
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
@@ -528,18 +530,21 @@ func getColumnSQLType(col *schema.Column, dialect sql.Dialect, driver string) st
 
 // protoAwareCSVGenerator generates CSV files with the exact structure from-proto expects
 type protoAwareCSVGenerator struct {
-	sink           *sink.Sinker
-	schema         *schema.Schema
-	dialect        sql.Dialect
+    sink           *sink.Sinker
+    schema         *schema.Schema
+    dialect        sql.Dialect
 	rootDescriptor protoreflect.MessageDescriptor
 	outputDir      string
 	workingDir     string
 	bundleSize     uint64
-	bufferSize     uint64
-	cursorsTable   string
-	bundlers       map[string]*bundler.Bundler
-	logger         *zap.Logger
-	useProtoOptions bool
+    bufferSize     uint64
+    cursorsTable   string
+    bundlers       map[string]*bundler.Bundler
+    cursorsStore   dstore.Store
+    logger         *zap.Logger
+    useProtoOptions bool
+
+    closeOnce sync.Once
 }
 
 // tableRows holds accumulated rows for a table during message traversal
@@ -633,33 +638,14 @@ func newProtoAwareCSVGenerator(
 		gen.bundlers[tableName] = b
 	}
 
-	// Create cursors bundler
-	cursorsWriter := writer.NewBufferedIO(
-		bufferSize,
-		filepath.Join(workingDir, cursorsTable),
-		writer.FileTypeCSV,
-		logger.With(zap.String("table_name", cursorsTable)),
-	)
+    // Prepare cursors store (single last_cursor file, no bundler)
+    cursorsStore, err := csvOutputStore.SubStore(cursorsTable)
+    if err != nil {
+        return nil, fmt.Errorf("creating cursors substore: %w", err)
+    }
+    gen.cursorsStore = cursorsStore
 
-	cursorsStore, err := csvOutputStore.SubStore(cursorsTable)
-	if err != nil {
-		return nil, fmt.Errorf("creating cursors substore: %w", err)
-	}
-
-	cursorsHeader := []byte("name,cursor\n")
-	cursorsBundler, err := bundler.New(bundleSize, stopBlock, cursorsWriter, cursorsStore, logger, cursorsHeader)
-	if err != nil {
-		return nil, fmt.Errorf("creating cursors bundler: %w", err)
-	}
-
-	if err := cursorsBundler.Start(startBlock); err != nil {
-		return nil, fmt.Errorf("starting cursors bundler: %w", err)
-	}
-
-	cursorsBundler.Launch(ctx)
-	gen.bundlers[cursorsTable] = cursorsBundler
-
-	return gen, nil
+    return gen, nil
 }
 
 // getColumnsForTable returns columns in the exact order from-proto expects
@@ -708,17 +694,21 @@ func (g *protoAwareCSVGenerator) getColumnsForTable(table *schema.Table) []strin
 
 // Run streams data and generates CSV files
 func (g *protoAwareCSVGenerator) Run(ctx context.Context) error {
-	g.sink.OnTerminating(func(err error) {
-		g.logger.Info("terminating CSV generation", zap.Error(err))
-		g.close()
-	})
+    // Ensure we always close bundlers exactly once on termination
+    g.sink.OnTerminating(func(err error) {
+        g.logger.Info("terminating CSV generation", zap.Error(err))
+        g.close()
+    })
 
 	// Start from the beginning (no cursor for export mode)
 	var cursor *sink.Cursor
-	
-	// Run the sinker with our handler
-	g.sink.Run(ctx, cursor, g)
-	return nil
+
+    // Run the sinker with our handler
+    g.sink.Run(ctx, cursor, g)
+
+    // Extra safety: ensure close after stream ends (idempotent)
+    g.close()
+    return nil
 }
 
 // HandleBlockUndoSignal handles block undo signals (implements sink.SinkerHandler)
@@ -800,16 +790,7 @@ func (g *protoAwareCSVGenerator) HandleBlockScopedData(ctx context.Context, data
 		}
 	}
 
-	// Write cursor data
-	if block.Number%g.bundleSize == 0 {
-		cursor := fmt.Sprintf("%d:%s", block.Number, block.Id)
-		cursorRow := fmt.Sprintf("cursor,%s\n", cursor)
-		if _, err := g.bundlers[g.cursorsTable].Writer().Write([]byte(cursorRow)); err != nil {
-			return fmt.Errorf("writing cursor: %w", err)
-		}
-	}
-
-	return nil
+    return nil
 }
 
 // walkMessageAndCollectRows mimics WalkMessageDescriptorAndInsertWithDialect but collects rows instead of inserting
@@ -1115,8 +1096,61 @@ func escapeCSVValue(s string) string {
 
 // close closes all bundlers
 func (g *protoAwareCSVGenerator) close() {
-	for tableName, b := range g.bundlers {
-		g.logger.Debug("closing bundler", zap.String("table", tableName))
-		b.Close()
-	}
+    g.closeOnce.Do(func() {
+        var wg sync.WaitGroup
+        for tableName, b := range g.bundlers {
+            g.logger.Debug("shutting down bundler", zap.String("table", tableName))
+            wg.Add(1)
+            go func(name string, bund *bundler.Bundler) {
+                // Trigger bundler shutdown and wait for it to terminate
+                bund.Shutdown(nil)
+                <-bund.Terminated()
+                g.logger.Debug("bundler terminated", zap.String("table", name))
+                wg.Done()
+            }(tableName, b)
+        }
+        wg.Wait()
+    })
+}
+
+// HandleBlockRangeCompletion ensures a clean shutdown when stop block is reached
+func (g *protoAwareCSVGenerator) HandleBlockRangeCompletion(ctx context.Context, cursor *sink.Cursor) error {
+    g.logger.Info("substreams ended correctly, reached your stop block", zap.Stringer("last_block_seen", cursor.Block()))
+
+    // Write final cursor file like generate-csv (single file, sorted columns)
+    if g.cursorsStore != nil {
+        var buf bytes.Buffer
+        cols := []string{"block_id", "block_num", "cursor", "id"}
+        sort.Strings(cols)
+        buf.WriteString(strings.Join(cols, ","))
+        buf.WriteString("\n")
+
+        block := cursor.Block()
+        // Values must follow the same alphabetical order as columns
+        row := fmt.Sprintf("%s,%d,%s,%s\n", block.ID(), block.Num(), cursor, g.sink.OutputModuleHash())
+        buf.WriteString(row)
+
+        if err := g.cursorsStore.WriteObject(ctx, lastCursorFilename, &buf); err != nil {
+            return fmt.Errorf("write last cursor file: %w", err)
+        }
+    }
+
+    // Finalize: if stop block is not aligned to bundle size, roll once past
+    // the current boundary to flush the last partial file before shutdown.
+    last := cursor.Block().Num()
+    trigger := last - (last%g.bundleSize) + g.bundleSize
+
+    for tableName, b := range g.bundlers {
+        if rolled, err := b.Roll(ctx, trigger); err != nil {
+            if err != bundler.ErrStopBlockReached {
+                g.logger.Warn("final roll failed", zap.String("table", tableName), zap.Error(err))
+            }
+        } else if rolled {
+            g.logger.Debug("finalized boundary on completion", zap.String("table", tableName), zap.Uint64("trigger", trigger))
+        }
+    }
+
+    // Gracefully close all bundlers before returning
+    g.close()
+    return nil
 }
