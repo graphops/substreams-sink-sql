@@ -46,12 +46,19 @@ func NewTableInfo(schema, name string, pkList []string, columnsByName map[string
 		return nil, fmt.Errorf("sql sink requires a primary key in every table, none was found in table %s.%s", schema, name)
 	}
 
+	var identifier string
+	if schema == "" {
+		identifier = nameEscaped
+	} else {
+		identifier = schemaEscaped + "." + nameEscaped
+	}
+
 	return &TableInfo{
 		schema:         schema,
 		schemaEscaped:  schemaEscaped,
 		name:           name,
 		nameEscaped:    nameEscaped,
-		identifier:     schemaEscaped + "." + nameEscaped,
+		identifier:     identifier,
 		primaryColumns: primaryColumns,
 		columnsByName:  columnsByName,
 	}, nil

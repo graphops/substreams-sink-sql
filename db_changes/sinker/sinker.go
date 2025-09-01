@@ -27,8 +27,9 @@ type SQLSinker struct {
 	logger *zap.Logger
 	tracer logging.Tracer
 
-	stats               *Stats
-	lastAppliedBlockNum *uint64
+	stats                *Stats
+	lastAppliedBlockNum  uint64
+	lastAppliedBlockTime time.Time
 
 	flushRetryCount int
 	flushRetryDelay time.Duration
@@ -44,7 +45,7 @@ func New(sink *sink.Sinker, loader *db2.Loader, logger *zap.Logger, tracer loggi
 		tracer: tracer,
 
 		stats:               NewStats(logger),
-		lastAppliedBlockNum: nil,
+		lastAppliedBlockNum: 0,
 		flushRetryCount:     flushRetryCount,
 		flushRetryDelay:     flushRetryDelay,
 	}, nil
@@ -65,7 +66,7 @@ func (s *SQLSinker) Close() error {
 }
 
 func (s *SQLSinker) Run(ctx context.Context) {
-	cursor, mistmatchDetected, err := s.loader.GetCursor(ctx, s.OutputModuleHash())
+	cursor, mismatchDetected, err := s.loader.GetCursor(ctx, s.OutputModuleHash())
 	if err != nil && !errors.Is(err, db2.ErrCursorNotFound) {
 		s.Shutdown(fmt.Errorf("unable to retrieve cursor: %w", err))
 		return
@@ -79,12 +80,16 @@ func (s *SQLSinker) Run(ctx context.Context) {
 			s.Shutdown(fmt.Errorf("unable to write initial empty cursor: %w", err))
 			return
 		}
-	} else if mistmatchDetected {
+
+	} else if mismatchDetected {
 		if err := s.loader.InsertCursor(ctx, s.OutputModuleHash(), cursor); err != nil {
-			s.Shutdown(fmt.Errorf("unable to write new cursor after module mistmatch: %w", err))
+			s.Shutdown(fmt.Errorf("unable to write new cursor after module mismatch: %w", err))
 			return
 		}
 	}
+
+	// Works in all cases, even if the cursor is blank or nil (gives 0)
+	s.lastAppliedBlockNum = cursor.Block().Num()
 
 	s.Sinker.OnTerminating(s.Shutdown)
 	s.OnTerminating(func(err error) {
@@ -115,6 +120,11 @@ func (s *SQLSinker) flushWithRetry(ctx context.Context, moduleHash string, curso
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
+			// Do not retry if flush delay is 0, useful in tests
+			if s.flushRetryDelay == 0 {
+				return 0, lastErr
+			}
+
 			delay := time.Duration(attempt) * s.flushRetryDelay
 			s.logger.Warn("retrying flush after error",
 				zap.Int("attempt", attempt),
@@ -168,17 +178,20 @@ func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstream
 			return fmt.Errorf("apply database changes: %w", err)
 		}
 	}
-	if s.lastAppliedBlockNum == nil {
-		s.lastAppliedBlockNum = &data.Clock.Number
+
+	blockFlushNeeded := s.batchBlockModulo(isLive) > 0 && data.Clock.Number-s.lastAppliedBlockNum >= s.batchBlockModulo(isLive)
+
+	if blockFlushNeeded && isLive != nil && *isLive && s.stats.AverageFlushDuration() > data.Clock.Timestamp.AsTime().Sub(s.lastAppliedBlockTime) {
+		s.logger.Debug("skipping a flush because we are LIVE and flush average duration is above time between blocks", zap.Duration("flush_duration_average", s.stats.AverageFlushDuration()), zap.Time("last_block_time", s.lastAppliedBlockTime), zap.Time("block_time", data.Clock.Timestamp.AsTime()))
+		blockFlushNeeded = false
 	}
 
-	blockFlushNeeded := s.batchBlockModulo(isLive) > 0 && data.Clock.Number-*s.lastAppliedBlockNum >= s.batchBlockModulo(isLive)
 	rowFlushNeeded := s.loader.FlushNeeded()
 
 	if blockFlushNeeded || rowFlushNeeded {
 		s.logger.Debug("flushing to database",
 			zap.Stringer("block", cursor.Block()),
-			zap.Uint64("last_flushed_block", *s.lastAppliedBlockNum),
+			zap.Uint64("last_flushed_block", s.lastAppliedBlockNum),
 			zap.Bool("is_live", *isLive),
 			zap.Bool("block_flush_interval_reached", blockFlushNeeded),
 			zap.Bool("row_flush_interval_reached", rowFlushNeeded),
@@ -208,14 +221,15 @@ func (s *SQLSinker) HandleBlockScopedData(ctx context.Context, data *pbsubstream
 
 		s.stats.RecordBlock(cursor.Block())
 		s.stats.RecordFlushDuration(flushDuration)
-		s.lastAppliedBlockNum = &data.Clock.Number
+		s.lastAppliedBlockNum = data.Clock.Number
+		s.lastAppliedBlockTime = data.Clock.Timestamp.AsTime()
 	}
 
 	return nil
 }
 
 func (s *SQLSinker) applyDatabaseChanges(dbChanges *pbdatabase.DatabaseChanges, blockNum, finalBlockNum uint64) error {
-	for _, change := range dbChanges.TableChanges {
+	for ordinal, change := range dbChanges.TableChanges {
 		if !s.loader.HasTable(change.Table) {
 			return fmt.Errorf(
 				"your Substreams sent us a change for a table named %s we don't know about on %s (available tables: %s)",
@@ -251,33 +265,40 @@ func (s *SQLSinker) applyDatabaseChanges(dbChanges *pbdatabase.DatabaseChanges, 
 
 		switch change.Operation {
 		case pbdatabase.TableChange_OPERATION_CREATE:
-			err := s.loader.Insert(change.Table, primaryKeys, changes, reversibleBlockNum)
+			err := s.loader.Insert(change.Table, primaryKeys, changes, uint64(ordinal), reversibleBlockNum)
 			if err != nil {
 				return fmt.Errorf("database insert: %w", err)
 			}
 		case pbdatabase.TableChange_OPERATION_UPSERT:
-			err := s.loader.Upsert(change.Table, primaryKeys, changes, reversibleBlockNum)
+			err := s.loader.Upsert(change.Table, primaryKeys, changes, uint64(ordinal), reversibleBlockNum)
 			if err != nil {
 				return fmt.Errorf("database upsert: %w", err)
 			}
 		case pbdatabase.TableChange_OPERATION_UPDATE:
-			err := s.loader.Update(change.Table, primaryKeys, changes, reversibleBlockNum)
+			err := s.loader.Update(change.Table, primaryKeys, changes, uint64(ordinal), reversibleBlockNum)
 			if err != nil {
 				return fmt.Errorf("database update: %w", err)
 			}
 		case pbdatabase.TableChange_OPERATION_DELETE:
-			err := s.loader.Delete(change.Table, primaryKeys, reversibleBlockNum)
+			err := s.loader.Delete(change.Table, primaryKeys, uint64(ordinal), reversibleBlockNum)
 			if err != nil {
 				return fmt.Errorf("database delete: %w", err)
 			}
 		default:
-			//case database.TableChange_UNSET:
 		}
 	}
+
 	return nil
 }
 
 func (s *SQLSinker) HandleBlockRangeCompletion(ctx context.Context, cursor *sink.Cursor) error {
+	// To be moved in the base sinker library, happens usually only on integration tests where the connection
+	// can close with "nil" error but we haven't completed the range for real yet.
+	if !s.Sinker.BlockRange().ReachedEndBlock(cursor.Block().Num()) {
+		s.logger.Debug("range not completed yet, skipping", zap.Stringer("block", cursor.Block()), zap.Stringer("range", s.Sinker.BlockRange()))
+		return nil
+	}
+
 	s.logger.Info("stream completed, flushing to database", zap.Stringer("block", cursor.Block()))
 	_, err := s.flushWithRetry(ctx, s.OutputModuleHash(), cursor, cursor.Block().Num(), s.flushRetryCount)
 	if err != nil {
@@ -305,4 +326,8 @@ func (s *SQLSinker) batchBlockModulo(isLive *bool) uint64 {
 	}
 
 	return BLOCK_FLUSH_INTERVAL_DISABLED
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }
