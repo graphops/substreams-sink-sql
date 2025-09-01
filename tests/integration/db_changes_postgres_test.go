@@ -497,6 +497,59 @@ func TestSinker_Integration_ParentChildOrdering(t *testing.T) {
 	)
 }
 
+func TestSinker_Integration_ComplexDependentTableOrdering(t *testing.T) {
+	dbConnectionString, postgresContainer := setupDbChangesPostgresContainer(t)
+
+	runSinkerTest(
+		t,
+		dbConnectionString,
+		postgresContainer,
+		rawSQLInput(`
+			CREATE TABLE IF NOT EXISTS %[1]s.departments (
+				id TEXT PRIMARY KEY
+			);
+			CREATE TABLE IF NOT EXISTS %[1]s.employees (
+				id TEXT PRIMARY KEY,
+				department_id TEXT NOT NULL,
+				CONSTRAINT fk_department
+					FOREIGN KEY(department_id)
+					REFERENCES %[1]s.departments(id)
+			);
+
+			-- Pre-existing data, like if the sinker had stopped at that point
+			INSERT INTO %[1]s.departments (id) VALUES ('dept1');
+		`, testSchema),
+		streamMock(
+			dbChangesBlockData(t, "10a", finalBlock("10a"),
+				insertRowSinglePK("employees", "emp1", "department_id", "dept1"),
+				insertRowSinglePK("departments", "dept2"),
+				insertRowSinglePK("employees", "emp2", "department_id", "dept2"),
+			),
+		),
+		func(t *testing.T, dbx *sqlx.DB) {
+			type DepartmentRow struct {
+				ID string `db:"id"`
+			}
+
+			type EmployeeRow struct {
+				ID           string `db:"id"`
+				DepartmentID string `db:"department_id"`
+			}
+
+			require.Equal(t, []*DepartmentRow{
+				{ID: "dept1"},
+				{ID: "dept2"},
+			}, readDbChangesRows[DepartmentRow](t, dbx, "departments"))
+
+			require.Equal(t, []*EmployeeRow{
+				{ID: "emp1", DepartmentID: "dept1"},
+				{ID: "emp2", DepartmentID: "dept2"},
+			}, readDbChangesRows[EmployeeRow](t, dbx, "employees"))
+		},
+		"Block #10 (10a) - LIB #10 (10a)",
+	)
+}
+
 func TestSinker_Integration_UndoBufferWorks(t *testing.T) {
 	testTables := db2.TestSinglePrimaryKeyTables(testSchema)
 	dbConnectionString, postgresContainer := setupDbChangesPostgresContainer(t)
@@ -624,8 +677,8 @@ func runCustomizedSinkerTest(
 		LiveBlockFlushInterval:  1,
 		OnModuleHashMismatch:    setupOptions.OnModuleHashMismatch,
 		HandleReorgs:            true,
-		FlushRetryCount:         3,
-		FlushRetryDelay:         1 * time.Second,
+		FlushRetryCount:         0,
+		FlushRetryDelay:         0,
 	}
 
 	dbSinker, err := sinker.SinkerFactory(baseSink, options)(ctx, dbDSN, logger, tracer)
@@ -701,6 +754,17 @@ func insertRowCompositePK(table string, pk map[string]string, fieldsAndValues ..
 			},
 		},
 		Operation: pbdatabase.TableChange_OPERATION_CREATE,
+		Fields:    getFields(fieldsAndValues...),
+	}
+}
+
+func updateRowSinglePK(table string, pk string, fieldsAndValues ...string) *pbdatabase.TableChange {
+	return &pbdatabase.TableChange{
+		Table: table,
+		PrimaryKey: &pbdatabase.TableChange_Pk{
+			Pk: pk,
+		},
+		Operation: pbdatabase.TableChange_OPERATION_UPDATE,
 		Fields:    getFields(fieldsAndValues...),
 	}
 }
