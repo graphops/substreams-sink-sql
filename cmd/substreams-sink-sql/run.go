@@ -100,7 +100,9 @@ func sinkRunE(cmd *cobra.Command, args []string) error {
 
 	cursorTableName := sflags.MustGetString(cmd, "cursors-table")
 	historyTableName := sflags.MustGetString(cmd, "history-table")
-	handleReorgs := sflags.MustGetInt(cmd, "undo-buffer-size") != 0
+    // If non-zero undo-buffer-size, we buffer and DO NOT handle DB-level reorgs.
+    // Therefore, handleReorgs should be true only when undo-buffer-size is zero.
+    handleReorgs := sflags.MustGetInt(cmd, "undo-buffer-size") == 0
 
 	sinkerFactory := sinker2.SinkerFactory(sink, sinker2.SinkerFactoryOptions{
 		CursorTableName:         cursorTableName,
