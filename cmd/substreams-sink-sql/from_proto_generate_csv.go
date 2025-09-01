@@ -32,6 +32,7 @@ import (
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	pbSchema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	pbsql "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/services/v1"
+	sinksql "github.com/streamingfast/substreams-sink-sql"
 	"github.com/streamingfast/substreams-sink-sql/services"
 	"github.com/streamingfast/substreams/manifest"
 	pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
@@ -40,9 +41,9 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-var fromProtoExportCmd = Command(fromProtoExportE,
-	"from-proto-export <dsn> <manifest> [module] [start]:[stop]",
-	"Export SQL schema and CSV data exactly as from-proto expects",
+var fromProtoGenerateCsvCmd = Command(fromProtoGenerateCsvE,
+	"from-proto-generate-csv <dsn> <manifest> [module] [start]:[stop]",
+	"Generate SQL schema and CSV data exactly as from-proto expects",
 	Description(`
 		Generates SQL schema definitions and CSV data dumps that are 100% compatible with from-proto mode.
 		
@@ -71,7 +72,7 @@ var fromProtoExportCmd = Command(fromProtoExportE,
 	}),
 )
 
-func fromProtoExportE(cmd *cobra.Command, args []string) error {
+func fromProtoGenerateCsvE(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
 	// Parse arguments exactly like from-proto
@@ -164,7 +165,7 @@ func fromProtoExportE(cmd *cobra.Command, args []string) error {
 	}
 
 	// Extract service exactly like from-proto
-	service, err := extractSinkService(spkg)
+	service, err := sinksql.ExtractSinkService(spkg)
 	if err != nil {
 		service = &pbsql.Service{}
 	}
@@ -242,14 +243,14 @@ func fromProtoExportE(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unsupported driver: %s", dsn.Driver())
 	}
 
-	// Export SQL schema
-	zlog.Info("exporting SQL schema", zap.String("path", schemaOutputPath))
+	// Generate SQL schema
+	zlog.Info("generating SQL schema", zap.String("path", schemaOutputPath))
 	if err := exportSQLSchema(dialect, sqlSchema, useConstraints, dsn.Driver(), schemaOutputPath); err != nil {
 		return fmt.Errorf("exporting SQL schema: %w", err)
 	}
 
-	// Export schema metadata
-	zlog.Info("exporting schema metadata", zap.String("path", schemaMetadataPath))
+	// Generate schema metadata
+	zlog.Info("generating schema metadata", zap.String("path", schemaMetadataPath))
 	if err := exportSchemaMetadata(sqlSchema, dialect, dsn.Driver(), schemaMetadataPath); err != nil {
 		return fmt.Errorf("exporting schema metadata: %w", err)
 	}
@@ -294,7 +295,7 @@ func fromProtoExportE(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("running CSV generator: %w", err)
 	}
 
-	zlog.Info("export completed successfully",
+	zlog.Info("CSV generation completed successfully",
 		zap.String("schema", schemaOutputPath),
 		zap.String("metadata", schemaMetadataPath),
 		zap.String("csv_data", outputDir),

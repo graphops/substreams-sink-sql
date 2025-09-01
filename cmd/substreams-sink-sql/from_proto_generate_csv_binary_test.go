@@ -1,4 +1,5 @@
 package main
+// Note: file renamed to align with from-proto-generate-csv command
 
 import (
 	"encoding/base64"

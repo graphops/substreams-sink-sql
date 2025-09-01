@@ -1,8 +1,8 @@
-# from-proto-export Mode Implementation
+# from-proto-generate-csv Mode Implementation
 
 ## Overview
 
-The `from-proto-export` mode is a new command that generates SQL schema definitions and CSV data dumps that are 100% compatible with the `from-proto` mode. This allows operators to export schema and data for manual injection, ensuring perfect compatibility between historical backfill and live streaming.
+The `from-proto-generate-csv` mode is a new command that generates SQL schema definitions and CSV data dumps that are 100% compatible with the `from-proto` mode. This allows operators to export schema and data for manual injection, ensuring perfect compatibility between historical backfill and live streaming.
 
 ## Key Features
 
@@ -29,7 +29,7 @@ The `from-proto-export` mode is a new command that generates SQL schema definiti
 
 ```bash
 # Export schema and generate CSV data
-substreams-sink-sql from-proto-export \
+substreams-sink-sql from-proto-generate-csv \
     "postgres://localhost:5432/mydb" \
     my-substreams.spkg \
     0:1000000 \
@@ -63,7 +63,7 @@ The implementation follows a simple but powerful principle: **reuse the exact sc
 
 ### Key Components
 
-1. **Command Structure** (`from_proto_export.go`)
+1. **Command Structure** (`from_proto_generate_csv.go`)
    - Parses protobuf definitions exactly like `from-proto`
    - Creates schema using same `schema.NewSchema()` function
    - Creates dialect using same constructors
@@ -100,7 +100,7 @@ The implementation follows a simple but powerful principle: **reuse the exact sc
 
 ```bash
 # Step 1: Export schema and historical data
-substreams-sink-sql from-proto-export \
+substreams-sink-sql from-proto-generate-csv \
     $DSN $MANIFEST 0:1000000 \
     --schema-output=./schema.sql \
     --output-dir=./csv-data
@@ -148,6 +148,6 @@ substreams-sink-sql from-proto \
 
 ## Conclusion
 
-The `from-proto-export` mode successfully bridges the gap between protobuf schema definitions and bulk data loading. By reusing the exact schema generation logic from `from-proto`, it guarantees perfect compatibility while giving operators full control over the injection process.
+The `from-proto-generate-csv` mode successfully bridges the gap between protobuf schema definitions and bulk data loading. By reusing the exact schema generation logic from `from-proto`, it guarantees perfect compatibility while giving operators full control over the injection process.
 
 The implementation is clean, maintainable, and follows the principle of maximum code reuse to ensure consistency. While there are areas for enhancement (particularly around message traversal and testing), the core functionality is solid and ready for use.

@@ -31,8 +31,7 @@ func main() {
 		injectCSVCmd,
 		createUserCmd,
 		fromProtoCmd,
-		fromProtoApplyConstraintsCmd,
-		fromProtoExportCmd,
+		fromProtoGenerateCsvCmd,
 
 		ConfigureViper("SINK_SQL"),
 		ConfigureVersion(version),
