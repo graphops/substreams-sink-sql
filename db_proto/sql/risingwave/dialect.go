@@ -168,11 +168,11 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 			}
 		}
 
-		// Determine field type
-		fieldType := MapFieldType(f.FieldDescriptor)
-		if f.IsUnique {
-			fieldType = fieldType + " UNIQUE"
-		}
+        // Determine field type
+        fieldType := MapFieldType(f.FieldDescriptor)
+        if f.IsUnique {
+            fieldType = fieldType + " UNIQUE"
+        }
 
 		// Add the column
 		sb.WriteString(fmt.Sprintf("%s %s", fieldQuotedName, fieldType))

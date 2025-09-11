@@ -232,8 +232,8 @@ func TestDialectRisingwave_CreateTable_WithUniqueConstraint(t *testing.T) {
 func TestDialectRisingwave_CreateTable_HandlesRepeatedScalarsAsArrays(t *testing.T) {
 	logger := zap.NewNop()
 
-	tagsField := createMockFieldDescriptor("tags", descriptor.FieldDescriptorProto_TYPE_STRING)
-	nameField := createMockFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
+    tagsField := createMockRepeatedFieldDescriptor("tags", descriptor.FieldDescriptorProto_TYPE_STRING)
+    nameField := createMockFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
 
 	table := &schema.Table{
 		Name: "users",
@@ -790,6 +790,37 @@ func createMockFieldDescriptor(name string, fieldType descriptor.FieldDescriptor
 	fieldDesc := msgDesc.GetFields()[0]
 
 	return fieldDesc
+}
+
+// Helper to create a repeated field descriptor
+func createMockRepeatedFieldDescriptor(name string, fieldType descriptor.FieldDescriptorProto_Type) *desc.FieldDescriptor {
+    fieldNumber := int32(1)
+    label := descriptor.FieldDescriptorProto_LABEL_REPEATED
+    proto := &descriptor.FieldDescriptorProto{
+        Name:   &name,
+        Type:   &fieldType,
+        Number: &fieldNumber,
+        Label:  &label,
+    }
+
+    msgProto := &descriptor.DescriptorProto{
+        Name:  stringPtr("TestMessageRepeated"),
+        Field: []*descriptor.FieldDescriptorProto{proto},
+    }
+
+    fileProto := &descriptor.FileDescriptorProto{
+        Name:        stringPtr("test_repeated.proto"),
+        MessageType: []*descriptor.DescriptorProto{msgProto},
+    }
+
+    fileDesc, err := desc.CreateFileDescriptor(fileProto)
+    if err != nil {
+        panic(err)
+    }
+
+    msgDesc := fileDesc.GetMessageTypes()[0]
+    fieldDesc := msgDesc.GetFields()[0]
+    return fieldDesc
 }
 
 func stringPtr(s string) *string {
