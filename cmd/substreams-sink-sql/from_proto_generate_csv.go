@@ -631,8 +631,10 @@ func exportSchemaMetadata(sqlSchema *schema.Schema, dialect sql.Dialect, driver 
 // computeCSVColumnOrder returns the exact CSV column order for a table
 func computeCSVColumnOrder(table *schema.Table, dialect sql.Dialect) []string {
     var cols []string
-    cols = append(cols, sql.DialectFieldBlockNumber)
-    cols = append(cols, sql.DialectFieldBlockTimestamp)
+    bn := dialectBlockNumberName(dialect)
+    bt := dialectBlockTimestampName(dialect)
+    cols = append(cols, bn)
+    cols = append(cols, bt)
     if dialect.UseVersionField() {
         cols = append(cols, sql.DialectFieldVersion)
     }
@@ -669,6 +671,28 @@ func getColumnSQLType(col *schema.Column, dialect sql.Dialect, driver string) st
 		return string(risingwave.MapFieldType(col.FieldDescriptor))
 	}
 	return "TEXT" // fallback
+}
+
+// dialectBlockNumberName returns the exact column name for the block number
+// system field for the given dialect (RisingWave uses non-underscored names).
+func dialectBlockNumberName(dialect sql.Dialect) string {
+    switch dialect.(type) {
+    case *risingwave.DialectRisingwave:
+        return "block_number"
+    default:
+        return sql.DialectFieldBlockNumber
+    }
+}
+
+// dialectBlockTimestampName returns the exact column name for the block timestamp
+// system field for the given dialect (RisingWave uses non-underscored names).
+func dialectBlockTimestampName(dialect sql.Dialect) string {
+    switch dialect.(type) {
+    case *risingwave.DialectRisingwave:
+        return "block_timestamp"
+    default:
+        return sql.DialectFieldBlockTimestamp
+    }
 }
 
 // protoAwareCSVGenerator generates CSV files with the exact structure from-proto expects
@@ -793,11 +817,11 @@ func newProtoAwareCSVGenerator(
 
 // getColumnsForTable returns columns in the exact order from-proto expects
 func (g *protoAwareCSVGenerator) getColumnsForTable(table *schema.Table) []string {
-	var columns []string
+    var columns []string
 
-	// Always add system columns first
-	columns = append(columns, sql.DialectFieldBlockNumber)
-	columns = append(columns, sql.DialectFieldBlockTimestamp)
+    // Always add system columns first
+    columns = append(columns, dialectBlockNumberName(g.dialect))
+    columns = append(columns, dialectBlockTimestampName(g.dialect))
 
 	// Add version/deleted if dialect requires
 	if g.dialect.UseVersionField() {
@@ -999,12 +1023,12 @@ func (g *protoAwareCSVGenerator) walkMessageAndCollectRows(dm *dynamic.Message, 
 		fieldValues = append(fieldValues, parent.id)
 	}
 
-	var childs []*dynamic.Message
-	var fieldNames []string
+    var childs []*dynamic.Message
+    var fieldNames []string
 
-	// Collect field names in order
-	fieldNames = append(fieldNames, sql.DialectFieldBlockNumber)
-	fieldNames = append(fieldNames, sql.DialectFieldBlockTimestamp)
+    // Collect field names in order
+    fieldNames = append(fieldNames, dialectBlockNumberName(g.dialect))
+    fieldNames = append(fieldNames, dialectBlockTimestampName(g.dialect))
 	if g.dialect.UseVersionField() {
 		fieldNames = append(fieldNames, sql.DialectFieldVersion)
 	}
@@ -1138,19 +1162,19 @@ func (g *protoAwareCSVGenerator) formatRowForCSV(row map[string]interface{}, tab
 
 // formatValue formats a value for CSV based on its SQL type
 func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName string, table *schema.Table) string {
-	if value == nil {
-		return ""
-	}
+    if value == nil {
+        return ""
+    }
 
-	// Handle system columns
-	if columnName == sql.DialectFieldBlockNumber {
-		return fmt.Sprintf("%d", value)
-	}
-	if columnName == sql.DialectFieldBlockTimestamp {
-		if t, ok := value.(time.Time); ok {
-			return t.Format(time.RFC3339)
-		}
-	}
+    // Handle system columns
+    if columnName == sql.DialectFieldBlockNumber || columnName == "block_number" {
+        return fmt.Sprintf("%d", value)
+    }
+    if columnName == sql.DialectFieldBlockTimestamp || columnName == "block_timestamp" {
+        if t, ok := value.(time.Time); ok {
+            return t.Format(time.RFC3339)
+        }
+    }
 	if columnName == sql.DialectFieldVersion {
 		return fmt.Sprintf("%d", value)
 	}

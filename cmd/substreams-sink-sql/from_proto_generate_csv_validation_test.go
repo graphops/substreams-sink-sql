@@ -116,6 +116,65 @@ func TestFieldValueAlignment(t *testing.T) {
 	assert.Equal(t, uint64(456), row["amount"])
 }
 
+// TestFieldValueAlignment_RisingWave validates name/value alignment for RisingWave
+func TestFieldValueAlignment_RisingWave(t *testing.T) {
+    // Create a test message with multiple fields
+    msgProto := &descriptor.DescriptorProto{
+        Name: proto.String("TestMessage"),
+        Field: []*descriptor.FieldDescriptorProto{
+            { Name: proto.String("id"),     Number: proto.Int32(1), Type: descriptor.FieldDescriptorProto_TYPE_INT64.Enum() },
+            { Name: proto.String("name"),   Number: proto.Int32(2), Type: descriptor.FieldDescriptorProto_TYPE_STRING.Enum() },
+            { Name: proto.String("amount"), Number: proto.Int32(3), Type: descriptor.FieldDescriptorProto_TYPE_UINT64.Enum() },
+        },
+    }
+
+    fileProto := &descriptor.FileDescriptorProto{ Name: proto.String("test.proto"), MessageType: []*descriptor.DescriptorProto{msgProto} }
+    fd, err := desc.CreateFileDescriptor(fileProto)
+    require.NoError(t, err)
+    msgDesc := fd.GetMessageTypes()[0]
+    dm := dynamic.NewMessage(msgDesc)
+    dm.SetFieldByName("id", int64(123))
+    dm.SetFieldByName("name", "test_name")
+    dm.SetFieldByName("amount", uint64(456))
+
+    // Build schema
+    testSchema := &schema.Schema{ Name: "test", TableRegistry: make(map[string]*schema.Table) }
+    idFd := createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_INT64)
+    nameFd := createSimpleFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
+    amountFd := createSimpleFieldDescriptor("amount", descriptor.FieldDescriptorProto_TYPE_UINT64)
+    testTable := &schema.Table{
+        Name: "TestMessage",
+        Columns: []*schema.Column{
+            { Name: "id",     IsPrimaryKey: true, FieldDescriptor: idFd },
+            { Name: "name",   FieldDescriptor: nameFd },
+            { Name: "amount", FieldDescriptor: amountFd },
+        },
+        PrimaryKey: &schema.PrimaryKey{ Name: "id", Index: 0, FieldDescriptor: idFd },
+    }
+    testSchema.TableRegistry["TestMessage"] = testTable
+
+    // Create RisingWave dialect
+    dialect, err := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
+    require.NoError(t, err)
+
+    // Create generator
+    gen := &protoAwareCSVGenerator{ schema: testSchema, dialect: dialect, logger: zap.NewNop(), useProtoOptions: false }
+
+    // Collect rows
+    blockTime := time.Now()
+    rows, err := gen.walkMessageAndCollectRows(dm, 100, blockTime, nil)
+    require.NoError(t, err)
+    require.Len(t, rows, 1)
+    row := rows[0].rows[0]
+
+    // Validate dialect-specific keys were used
+    assert.Equal(t, uint64(100), row["block_number"])
+    assert.Equal(t, blockTime, row["block_timestamp"])
+    assert.Equal(t, int64(123), row["id"])
+    assert.Equal(t, "test_name", row["name"])
+    assert.Equal(t, uint64(456), row["amount"])
+}
+
 // TestParentIDColumnInCSV validates that parent_id columns are included in CSV
 func TestParentIDColumnInCSV(t *testing.T) {
 	// This test validates Issue #4: Missing parent_id in CSV header
