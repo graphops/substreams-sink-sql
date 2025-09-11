@@ -84,8 +84,15 @@ func createInsertFromDescriptorAcc(table *schema.Table, dialect sql2.Dialect) (s
 			continue
 		}
 
-		if field.IsRepeated || field.IsExtension {
+		if field.IsExtension { // not a direct child
 			continue
+		}
+		if field.IsRepeated {
+			// Skip repeated messages, but allow repeated scalars (arrays)
+			if field.IsMessage {
+				continue
+			}
+			// Allow repeated scalar fields to be processed as arrays
 		}
 		fieldNames = append(fieldNames, field.QuotedName())
 	}

@@ -136,9 +136,12 @@ func (d *DialectRisingwave) createTable(table *schema.Table) error {
 
 		fieldQuotedName := f.QuotedName()
 
-		// Skip repeated fields (not supported in SQL)
+		// Allow repeated scalar fields as arrays; skip repeated messages
 		if f.IsRepeated {
-			continue
+			if f.IsMessage {
+				continue
+			}
+			// Repeated scalars proceed and are typed as arrays by MapFieldType
 		}
 
 		// Skip message fields that don't map to simple columns

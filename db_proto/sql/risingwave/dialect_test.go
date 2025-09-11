@@ -229,7 +229,7 @@ func TestDialectRisingwave_CreateTable_WithUniqueConstraint(t *testing.T) {
 	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
 }
 
-func TestDialectRisingwave_CreateTable_SkipsRepeatedFields(t *testing.T) {
+func TestDialectRisingwave_CreateTable_HandlesRepeatedScalarsAsArrays(t *testing.T) {
 	logger := zap.NewNop()
 
 	tagsField := createMockFieldDescriptor("tags", descriptor.FieldDescriptorProto_TYPE_STRING)
@@ -247,9 +247,10 @@ func TestDialectRisingwave_CreateTable_SkipsRepeatedFields(t *testing.T) {
 	d, err := NewDialectRisingwave("public", tableRegistry, logger)
 	require.NoError(t, err)
 
-	sql := d.CreateTableSql["users"]
-	assert.NotContains(t, sql, "tags")
-	assert.Contains(t, sql, `"name" CHARACTER VARYING`)
+    sql := d.CreateTableSql["users"]
+    // Repeated scalar field should be present as an array type
+    assert.Contains(t, sql, `"tags" CHARACTER VARYING[]`)
+    assert.Contains(t, sql, `"name" CHARACTER VARYING`)
 }
 
 func TestDialectRisingwave_CreateTable_PreventsDuplicateColumns(t *testing.T) {

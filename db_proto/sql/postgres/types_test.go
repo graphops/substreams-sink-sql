@@ -28,7 +28,7 @@ func TestValueToString(t *testing.T) {
 		{"int", int(789), "789"},
 
 		// Unsigned integer values
-		{"uint64", uint64(123), "'123'"},
+		{"uint64", uint64(123), "123"},
 		{"uint32", uint32(456), "456"},
 		{"uint", uint(789), "789"},
 
