@@ -71,27 +71,27 @@ func (d *DialectRisingwave) init() error {
 }
 
 func (d *DialectRisingwave) createTable(table *schema.Table) error {
-	var sb strings.Builder
-	addedColumns := make(map[string]struct{})
+    var sb strings.Builder
+    addedColumns := make(map[string]struct{})
 
-	tableName := d.FullTableName(table)
+    tableName := d.FullTableName(table)
 
-	sb.WriteString(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (", tableName))
+    sb.WriteString(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (", tableName))
 
-	// Add primary key if it exists
-	var primaryKeyFieldName string
-	if table.PrimaryKey != nil {
-		pk := table.PrimaryKey
-		primaryKeyFieldName = pk.Name
-		sb.WriteString(fmt.Sprintf("%s %s PRIMARY KEY,", pk.Name, MapFieldType(pk.FieldDescriptor)))
-		addedColumns[pk.Name] = struct{}{}
-	}
+    // Always add block metadata columns first (align column order across dialects)
+    sb.WriteString(" block_number INTEGER,")
+    sb.WriteString(" block_timestamp TIMESTAMP WITH TIME ZONE,")
+    addedColumns["block_number"] = struct{}{}
+    addedColumns["block_timestamp"] = struct{}{}
 
-	// Always add block metadata columns
-	sb.WriteString(" block_number INTEGER,")
-	sb.WriteString(" block_timestamp TIMESTAMP WITH TIME ZONE,")
-	addedColumns["block_number"] = struct{}{}
-	addedColumns["block_timestamp"] = struct{}{}
+    // Add primary key column next if it exists (inline PRIMARY KEY)
+    var primaryKeyFieldName string
+    if table.PrimaryKey != nil {
+        pk := table.PrimaryKey
+        primaryKeyFieldName = pk.Name
+        sb.WriteString(fmt.Sprintf("%s %s PRIMARY KEY,", pk.Name, MapFieldType(pk.FieldDescriptor)))
+        addedColumns[pk.Name] = struct{}{}
+    }
 
 	// Add parent key for child tables
 	var parentKeyColumns []string

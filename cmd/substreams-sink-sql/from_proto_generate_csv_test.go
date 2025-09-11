@@ -147,6 +147,14 @@ func TestFromProtoGenerateCSVCompatibility_RisingWave(t *testing.T) {
     assert.NotContains(t, fullSQL, "_block_number_")
     assert.NotContains(t, fullSQL, "_block_timestamp_")
 
+    // Ensure ordering: system columns appear before id column
+    // (block_number before id)
+    idxBN := strings.Index(fullSQL, "block_number")
+    idxID := strings.Index(fullSQL, "id BIGINT PRIMARY KEY")
+    if idxBN >= 0 && idxID >= 0 {
+        assert.Less(t, idxBN, idxID, "block_number should appear before id in column list")
+    }
+
     // User columns with correct types (id unquoted, others quoted by dialect)
     assert.Contains(t, fullSQL, "id BIGINT PRIMARY KEY")
     assert.Contains(t, fullSQL, `"name" CHARACTER VARYING`)
