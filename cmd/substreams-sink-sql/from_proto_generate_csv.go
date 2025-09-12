@@ -391,9 +391,11 @@ func exportSQLSchema(dialect sql.Dialect, sqlSchema *schema.Schema, useConstrain
         b.WriteString(seed)
         b.WriteString("\n")
     case "risingwave":
-        // RisingWave does not support ON CONFLICT at INSERT time; enable ON CONFLICT OVERWRITE at CREATE TABLE
-        // and perform a plain INSERT here.
-        seed := fmt.Sprintf("INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) VALUES ('%s');", sqlSchema.Name, dialect.SchemaHash())
+        // RisingWave: emulate DO NOTHING semantics with WHERE NOT EXISTS
+        seed := fmt.Sprintf(
+            "INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) SELECT '%s' WHERE NOT EXISTS (SELECT 1 FROM \"%s\".\"_sink_info_\" WHERE schema_hash = '%s');",
+            sqlSchema.Name, dialect.SchemaHash(), sqlSchema.Name, dialect.SchemaHash(),
+        )
         b.WriteString("-- Seed\n")
         b.WriteString(seed)
         b.WriteString("\n")
