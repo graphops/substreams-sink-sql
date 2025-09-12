@@ -85,12 +85,9 @@ func TestDialectRisingwave_CreateTableStaticSql(t *testing.T) {
     assert.Contains(t, sql, "_cursor_")
     assert.Contains(t, sql, "name varchar primary key")
     assert.Contains(t, sql, "cursor varchar")
-    assert.Contains(t, sql, "on conflict overwrite")
 
-    // Check conflict policies per table
-    // _sink_info_: DO NOTHING
-    assert.Contains(t, sql, "_sink_info_")
-    assert.Contains(t, sql, "on conflict do nothing")
+    // No ON CONFLICT clauses expected in static DDL
+    assert.NotContains(t, sql, "on conflict")
 
 	// Check _blocks_ table
 	assert.Contains(t, sql, "_blocks_")

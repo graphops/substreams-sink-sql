@@ -55,7 +55,7 @@ func (i *RowInserter) init(database *Database) error {
 	}
 	insertStatements["_blocks_"] = bs
 
-    // Use plain INSERT; table-level ON CONFLICT policy (OVERWRITE) is defined in CREATE TABLE
+    // Use plain INSERT; RisingWave static DDL does not use ON CONFLICT clauses.
     insertQueries["_cursor_"] = fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2)", tableName(database.schema.Name, "_cursor_"))
 	cs, err := database.db.Prepare(insertQueries["_cursor_"])
 	if err != nil {

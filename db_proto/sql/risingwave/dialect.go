@@ -18,12 +18,12 @@ const risingwaveStaticSql = `
 
 	CREATE TABLE IF NOT EXISTS "%s"._sink_info_ (
 		schema_hash VARCHAR PRIMARY KEY
-	) ON CONFLICT DO NOTHING;
+	);
 
 	CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
 		name VARCHAR PRIMARY KEY,
 		cursor VARCHAR
-	) ON CONFLICT OVERWRITE;
+	);
 
 	CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
 		number INTEGER PRIMARY KEY,

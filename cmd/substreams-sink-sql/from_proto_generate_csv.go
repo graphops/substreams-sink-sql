@@ -524,17 +524,17 @@ CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
 );`, schemaName, schemaName, schemaName, schemaName)
 
     case "risingwave":
-        // Matches db_proto/sql/risingwave/dialect.go risingwaveStaticSql
+        // Matches db_proto/sql/risingwave/dialect.go risingwaveStaticSql (no ON CONFLICT clauses)
         return fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s";
 
 CREATE TABLE IF NOT EXISTS "%s"._sink_info_ (
     schema_hash VARCHAR PRIMARY KEY
-) ON CONFLICT DO NOTHING;
+);
 
 CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
     name VARCHAR PRIMARY KEY,
     cursor VARCHAR
-) ON CONFLICT OVERWRITE;
+);
 
 CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
     number INTEGER PRIMARY KEY,
