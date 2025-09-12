@@ -385,8 +385,15 @@ func exportSQLSchema(dialect sql.Dialect, sqlSchema *schema.Schema, useConstrain
 
     // Seed sink info so from-proto can start without error
     switch driver {
-    case "postgres", "risingwave":
+    case "postgres":
         seed := fmt.Sprintf("INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) VALUES ('%s') ON CONFLICT (schema_hash) DO NOTHING;", sqlSchema.Name, dialect.SchemaHash())
+        b.WriteString("-- Seed\n")
+        b.WriteString(seed)
+        b.WriteString("\n")
+    case "risingwave":
+        // RisingWave does not support ON CONFLICT at INSERT time; enable ON CONFLICT OVERWRITE at CREATE TABLE
+        // and perform a plain INSERT here.
+        seed := fmt.Sprintf("INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) VALUES ('%s');", sqlSchema.Name, dialect.SchemaHash())
         b.WriteString("-- Seed\n")
         b.WriteString(seed)
         b.WriteString("\n")
@@ -520,7 +527,7 @@ CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
 
 CREATE TABLE IF NOT EXISTS "%s"._sink_info_ (
     schema_hash VARCHAR PRIMARY KEY
-);
+) ON CONFLICT OVERWRITE;
 
 CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
     name VARCHAR PRIMARY KEY,

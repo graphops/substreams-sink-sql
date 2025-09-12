@@ -66,12 +66,23 @@ Notes:
 ## Schema File
 
 - `schema.sql` is the exact DDL `from-proto` would execute.
-- For PostgreSQL/RisingWave, a line is appended to seed `_sink_info_` with the schema hash:
-  ```sql
-  INSERT INTO "<schema>"."_sink_info_" (schema_hash)
-  VALUES ('<hash>')
-  ON CONFLICT (schema_hash) DO NOTHING;
-  ```
+- Seeding `_sink_info_` with the schema hash differs by dialect:
+  - PostgreSQL:
+    ```sql
+    INSERT INTO "<schema>"."_sink_info_" (schema_hash)
+    VALUES ('<hash>')
+    ON CONFLICT (schema_hash) DO NOTHING;
+    ```
+  - RisingWave:
+    - Tables are created with `ON CONFLICT OVERWRITE` at CREATE TABLE for `_sink_info_` and `_cursor_`.
+    - The seed uses a DO-NOTHING equivalent pattern:
+    ```sql
+    INSERT INTO "<schema>"."_sink_info_" (schema_hash)
+    SELECT '<hash>'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM "<schema>"."_sink_info_" WHERE schema_hash = '<hash>'
+    );
+    ```
   This lets `from-proto` start without additional migrations.
 
 ## End‑to‑End Workflow (PostgreSQL)
@@ -118,7 +129,8 @@ substreams-sink-sql from-proto "$PSQL_DSN" "$MANIFEST" "$MODULE" \
 
 ## Dialect Notes
 
-- PostgreSQL/RisingWave: `_sink_info_`, `_cursor_`, `_blocks_` tables are created in `schema.sql`. Cursor injection uses `COPY ... WITH (HEADER)`.
+- PostgreSQL: `_sink_info_`, `_cursor_`, `_blocks_` tables are created in `schema.sql`. Cursor injection uses `COPY ... WITH (HEADER)`.
+- RisingWave: `_sink_info_` and `_cursor_` are created with `ON CONFLICT OVERWRITE` to make subsequent inserts idempotent. The seed uses a `WHERE NOT EXISTS` form.
 - ClickHouse: CSVs include dialect-specific version/deleted fields. Schema.sql includes database and `_blocks_` table; cursor/sink info are not table-based — follow FROM_PROTO.md for CH specifics.
 
 ## Operational Tips
