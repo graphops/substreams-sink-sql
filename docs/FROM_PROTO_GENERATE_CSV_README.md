@@ -74,16 +74,14 @@ Notes:
     ON CONFLICT (schema_hash) DO NOTHING;
     ```
   - RisingWave:
-    - Tables are created with `ON CONFLICT OVERWRITE` at CREATE TABLE for `_sink_info_` and `_cursor_`.
-    - The seed uses a DO-NOTHING equivalent pattern:
+    - Conflict policy is defined at CREATE TABLE (table-level), not per INSERT.
+    - We set: `_sink_info_` → `ON CONFLICT DO NOTHING`; `_cursor_` → `ON CONFLICT OVERWRITE`.
+    - The seed uses a plain INSERT and relies on the table-level policy:
     ```sql
     INSERT INTO "<schema>"."_sink_info_" (schema_hash)
-    SELECT '<hash>'
-    WHERE NOT EXISTS (
-      SELECT 1 FROM "<schema>"."_sink_info_" WHERE schema_hash = '<hash>'
-    );
+    VALUES ('<hash>');
     ```
-  This lets `from-proto` start without additional migrations.
+  This lets `from-proto` start without additional migrations and keeps the seed idempotent.
 
 ## End‑to‑End Workflow (PostgreSQL)
 
@@ -130,7 +128,10 @@ substreams-sink-sql from-proto "$PSQL_DSN" "$MANIFEST" "$MODULE" \
 ## Dialect Notes
 
 - PostgreSQL: `_sink_info_`, `_cursor_`, `_blocks_` tables are created in `schema.sql`. Cursor injection uses `COPY ... WITH (HEADER)`.
-- RisingWave: `_sink_info_` and `_cursor_` are created with `ON CONFLICT OVERWRITE` to make subsequent inserts idempotent. The seed uses a `WHERE NOT EXISTS` form.
+- RisingWave: Conflict policy is defined on CREATE TABLE (not per INSERT). We set:
+  - `_sink_info_`: `ON CONFLICT DO NOTHING` (idempotent seed)
+  - `_cursor_`: `ON CONFLICT OVERWRITE` (upsert semantics for the single cursor row)
+  The seed is a plain `INSERT`, relying on table-level policies.
 - ClickHouse: CSVs include dialect-specific version/deleted fields. Schema.sql includes database and `_blocks_` table; cursor/sink info are not table-based — follow FROM_PROTO.md for CH specifics.
 
 ## Operational Tips

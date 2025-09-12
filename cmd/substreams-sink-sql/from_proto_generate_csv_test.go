@@ -185,13 +185,13 @@ func TestSchemaSeed_RisingWave(t *testing.T) {
     err = exportSQLSchema(dialect, testSchema, true, "risingwave", f.Name())
     require.NoError(t, err)
 
-    // Read and assert WHERE NOT EXISTS pattern
+    // Read and assert RisingWave plain INSERT (table-level policy is in DDL)
     data, err := os.ReadFile(f.Name())
     require.NoError(t, err)
     sqlText := string(data)
 
-    assert.Contains(t, sqlText, "INSERT INTO \"test_schema\".\"_sink_info_\" (schema_hash) SELECT ")
-    assert.Contains(t, sqlText, "WHERE NOT EXISTS (")
+    assert.Contains(t, sqlText, "INSERT INTO \"test_schema\".\"_sink_info_\" (schema_hash) VALUES (")
+    assert.NotContains(t, sqlText, "ON CONFLICT")
 }
 
 // TestCSVColumnOrder ensures CSV columns are in the exact order from-proto expects

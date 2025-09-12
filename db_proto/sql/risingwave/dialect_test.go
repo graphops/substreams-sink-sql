@@ -85,12 +85,12 @@ func TestDialectRisingwave_CreateTableStaticSql(t *testing.T) {
     assert.Contains(t, sql, "_cursor_")
     assert.Contains(t, sql, "name varchar primary key")
     assert.Contains(t, sql, "cursor varchar")
-    assert.Contains(t, sql, "on conflict overwrite", "RisingWave should use ON CONFLICT OVERWRITE")
+    assert.Contains(t, sql, "on conflict overwrite")
 
-    // Check that _sink_info_ also uses ON CONFLICT OVERWRITE semantics
-    // Count occurrences to ensure both _sink_info_ and _cursor_ include it
-    occurrences := strings.Count(sql, "on conflict overwrite")
-    assert.GreaterOrEqual(t, occurrences, 2, "_sink_info_ and _cursor_ should both include ON CONFLICT OVERWRITE")
+    // Check conflict policies per table
+    // _sink_info_: DO NOTHING
+    assert.Contains(t, sql, "_sink_info_")
+    assert.Contains(t, sql, "on conflict do nothing")
 
 	// Check _blocks_ table
 	assert.Contains(t, sql, "_blocks_")

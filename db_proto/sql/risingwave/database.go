@@ -279,11 +279,12 @@ func (d *Database) FetchSinkInfo(schemaName string) (*sql.SinkInfo, error) {
 }
 
 func (d *Database) StoreSinkInfo(schemaName string, schemaHash string) error {
-	_, err := d.execSql(fmt.Sprintf("INSERT INTO %s._sink_info_ (schema_hash) VALUES ($1)", schemaName), schemaHash)
-	if err != nil {
-		return fmt.Errorf("storing schema hash: %w", err)
-	}
-	return nil
+    // Use plain INSERT; table-level ON CONFLICT DO NOTHING is defined in CREATE TABLE
+    _, err := d.execSql(fmt.Sprintf("INSERT INTO %s._sink_info_ (schema_hash) VALUES ($1)", schemaName), schemaHash)
+    if err != nil {
+        return fmt.Errorf("storing schema hash: %w", err)
+    }
+    return nil
 }
 
 func (d *Database) UpdateSinkInfoHash(schemaName string, newHash string) error {

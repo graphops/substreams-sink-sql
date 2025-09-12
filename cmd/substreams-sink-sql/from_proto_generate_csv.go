@@ -391,10 +391,10 @@ func exportSQLSchema(dialect sql.Dialect, sqlSchema *schema.Schema, useConstrain
         b.WriteString(seed)
         b.WriteString("\n")
     case "risingwave":
-        // RisingWave: emulate DO NOTHING semantics with WHERE NOT EXISTS
+        // RisingWave: rely on table-level ON CONFLICT policy (DO NOTHING) defined in CREATE TABLE
         seed := fmt.Sprintf(
-            "INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) SELECT '%s' WHERE NOT EXISTS (SELECT 1 FROM \"%s\".\"_sink_info_\" WHERE schema_hash = '%s');",
-            sqlSchema.Name, dialect.SchemaHash(), sqlSchema.Name, dialect.SchemaHash(),
+            "INSERT INTO \"%s\".\"_sink_info_\" (schema_hash) VALUES ('%s');",
+            sqlSchema.Name, dialect.SchemaHash(),
         )
         b.WriteString("-- Seed\n")
         b.WriteString(seed)
@@ -529,7 +529,7 @@ CREATE TABLE IF NOT EXISTS "%s"._blocks_ (
 
 CREATE TABLE IF NOT EXISTS "%s"._sink_info_ (
     schema_hash VARCHAR PRIMARY KEY
-) ON CONFLICT OVERWRITE;
+) ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS "%s"._cursor_ (
     name VARCHAR PRIMARY KEY,
