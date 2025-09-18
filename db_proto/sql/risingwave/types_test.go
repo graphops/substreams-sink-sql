@@ -46,7 +46,7 @@ func TestValueToString(t *testing.T) {
 		{"empty bytes", []uint8{}, "'\\x'"},
 
 		// Time values
-		{"time", time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC), "'2023-01-15 10:30:00.000000+00:00'"},
+		{"time", time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC), "'" + timefmt.FormatRisingWave(time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC)) + "'"},
 	}
 
 	for _, tt := range tests {
@@ -62,7 +62,7 @@ func TestValueToStringTimestamp(t *testing.T) {
 	testTime := time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC)
 	pbTime := timestamppb.New(testTime)
 	result := ValueToString(pbTime)
-	assert.Equal(t, "'2023-01-15 10:30:00.000000+00:00'", result)
+	assert.Equal(t, "'"+timefmt.FormatRisingWave(testTime)+"'", result)
 
 	// Non-UTC timestamp should be converted to UTC before formatting
 	nonUTCTime := time.Date(2023, 1, 15, 10, 30, 0, 987000000, time.FixedZone("UTC-5", -5*3600))

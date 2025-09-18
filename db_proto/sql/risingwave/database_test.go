@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,6 +31,8 @@ func TestTableName(t *testing.T) {
 
 // Test value conversion for RisingWave-specific handling
 func TestValueConversion(t *testing.T) {
+	timeValue := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+
 	tests := []struct {
 		name     string
 		input    interface{}
@@ -41,7 +44,7 @@ func TestValueConversion(t *testing.T) {
 		{"uint64", uint64(456), "456"},
 		{"bool true", true, "true"},
 		{"bool false", false, "false"},
-		{"time", time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), "'2023-01-01 00:00:00.000000+00:00'"},
+		{"time", timeValue, "'" + timefmt.FormatRisingWave(timeValue) + "'"},
 		{"bytes", []byte{0xDE, 0xAD}, "'\\xDEAD'"},
 	}
 
