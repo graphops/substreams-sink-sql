@@ -531,7 +531,13 @@ func TestCSVRowFormatting(t *testing.T) {
 		"bool_field":                   true,
 	}
 
-	csvData := gen.formatRowForCSV(row, testTable)
+	columns := gen.getColumnsForTable(testTable)
+	rowSlice := make([]interface{}, len(columns))
+	for i, col := range columns {
+		rowSlice[i] = row[col]
+	}
+
+	csvData := gen.formatRowForCSV(rowSlice, testTable)
 	csvString := string(csvData)
 
 	// Expected CSV format
@@ -578,7 +584,13 @@ func TestCSVRowFormattingRisingWaveTimestamp(t *testing.T) {
 		"bool_field":                       true,
 	}
 
-	csvData := gen.formatRowForCSV(row, testTable)
+	columns := gen.getColumnsForTable(testTable)
+	rowSlice := make([]interface{}, len(columns))
+	for i, col := range columns {
+		rowSlice[i] = row[col]
+	}
+
+	csvData := gen.formatRowForCSV(rowSlice, testTable)
 	csvString := string(csvData)
 
 	expectedTimestamp := timefmt.FormatRisingWave(blockTime)

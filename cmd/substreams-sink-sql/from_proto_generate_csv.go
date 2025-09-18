@@ -716,6 +716,8 @@ type protoAwareCSVGenerator struct {
 	rootMessage      *dynamic.Message
 	tableColumns     map[string][]string
 	fieldColumnNames map[fieldColumnKey]string
+	columnIndexes    map[string]map[string]int
+	rowBufferPools   map[string]*sync.Pool
 	outputDir        string
 	workingDir       string
 	bundleSize       uint64
@@ -732,7 +734,7 @@ type protoAwareCSVGenerator struct {
 // tableRows holds accumulated rows for a table during message traversal
 type tableRows struct {
 	tableName string
-	rows      []map[string]interface{}
+	rows      [][]interface{}
 }
 
 type fieldColumnKey struct {
@@ -761,6 +763,8 @@ func newProtoAwareCSVGenerator(
 		rootDescriptor:   rootDescriptor,
 		tableColumns:     make(map[string][]string),
 		fieldColumnNames: make(map[fieldColumnKey]string),
+		columnIndexes:    make(map[string]map[string]int),
+		rowBufferPools:   make(map[string]*sync.Pool),
 		outputDir:        outputDir,
 		workingDir:       workingDir,
 		bundleSize:       bundleSize,
@@ -809,6 +813,7 @@ func newProtoAwareCSVGenerator(
 	for tableName, table := range sqlSchema.TableRegistry {
 		columns := gen.getColumnsForTable(table)
 		gen.registerFieldColumns(table)
+		gen.ensureRowBufferPool(tableName, len(columns))
 
 		bundlerWriter := writer.NewBufferedIO(
 			bufferSize,
@@ -863,6 +868,16 @@ func (g *protoAwareCSVGenerator) getColumnsForTable(table *schema.Table) []strin
 	columns := g.computeColumnsForTable(table)
 	if g.tableColumns != nil {
 		g.tableColumns[table.Name] = columns
+	}
+
+	if g.columnIndexes != nil {
+		if _, exists := g.columnIndexes[table.Name]; !exists {
+			index := make(map[string]int, len(columns))
+			for i, name := range columns {
+				index[name] = i
+			}
+			g.columnIndexes[table.Name] = index
+		}
 	}
 
 	return columns
@@ -932,6 +947,69 @@ func (g *protoAwareCSVGenerator) columnNameForField(tableName string, fd *desc.F
 
 	name, ok := g.fieldColumnNames[fieldColumnKey{table: tableName, field: fd}]
 	return name, ok
+}
+
+func (g *protoAwareCSVGenerator) columnIndexForTable(tableName string) map[string]int {
+	if g.columnIndexes == nil {
+		return nil
+	}
+	return g.columnIndexes[tableName]
+}
+
+func (g *protoAwareCSVGenerator) ensureRowBufferPool(tableName string, size int) {
+	if g.rowBufferPools == nil {
+		return
+	}
+
+	if _, exists := g.rowBufferPools[tableName]; exists {
+		return
+	}
+
+	g.rowBufferPools[tableName] = &sync.Pool{
+		New: func() interface{} {
+			return make([]interface{}, size)
+		},
+	}
+}
+
+func (g *protoAwareCSVGenerator) acquireRowBuffer(tableName string, size int) []interface{} {
+	if pool, ok := g.rowBufferPools[tableName]; ok {
+		buf := pool.Get().([]interface{})
+		if cap(buf) < size {
+			buf = make([]interface{}, size)
+		}
+		buf = buf[:size]
+		for i := range buf {
+			buf[i] = nil
+		}
+		return buf
+	}
+
+	buf := make([]interface{}, size)
+	for i := range buf {
+		buf[i] = nil
+	}
+	return buf
+}
+
+func (g *protoAwareCSVGenerator) releaseRowBuffer(tableName string, buf []interface{}) {
+	for i := range buf {
+		buf[i] = nil
+	}
+	if pool, ok := g.rowBufferPools[tableName]; ok {
+		pool.Put(buf)
+	}
+}
+
+func assignRowValue(row []interface{}, columnIndex map[string]int, column string, value interface{}) {
+	if columnIndex == nil {
+		return
+	}
+	idx, ok := columnIndex[column]
+	if !ok || idx >= len(row) {
+		return
+	}
+	row[idx] = value
 }
 
 // Run streams data and generates CSV files
@@ -1030,8 +1108,10 @@ func (g *protoAwareCSVGenerator) HandleBlockScopedData(ctx context.Context, data
 		for _, row := range tr.rows {
 			csvData := g.formatRowForCSV(row, table)
 			if _, err := bundler.Writer().Write(csvData); err != nil {
+				g.releaseRowBuffer(tr.tableName, row)
 				return fmt.Errorf("writing row to table %s: %w", tr.tableName, err)
 			}
+			g.releaseRowBuffer(tr.tableName, row)
 		}
 	}
 
@@ -1069,150 +1149,142 @@ func (g *protoAwareCSVGenerator) walkMessageAndCollectRows(dm *dynamic.Message, 
 
 	g.logger.Debug("walking message descriptor", zap.String("message_descriptor_name", md.GetName()), zap.Any("table_info", tableInfo))
 
+	releaseAccumulated := func() {
+		for _, tr := range allRows {
+			for _, row := range tr.rows {
+				g.releaseRowBuffer(tr.tableName, row)
+			}
+		}
+	}
+
 	var table *schema.Table
 	if tableInfo != nil {
 		table = g.dialect.GetTable(tableInfo.Name)
 	}
 
-	// Build the row for this message
-	var fieldValues []interface{}
-	fieldValues = append(fieldValues, blockNum)
-	fieldValues = append(fieldValues, blockTimestamp)
+	var (
+		tableName   string
+		rowValues   []interface{}
+		columnIndex map[string]int
+		pkValue     interface{}
+		pkDefined   bool
+	)
 
-	primaryKeyOffset := 2
-	if g.dialect.UseVersionField() {
-		fieldValues = append(fieldValues, time.Now().UnixNano())
-		primaryKeyOffset += 1
-	}
-
-	if g.dialect.UseDeletedField() {
-		fieldValues = append(fieldValues, false)
-		primaryKeyOffset += 1
-	}
-
-	primaryKey := ""
-	if table != nil && table.PrimaryKey != nil {
-		primaryKey = table.PrimaryKey.Name
-		// Fetch PK value using the protobuf field name, not the SQL column name
-		pkFieldName := table.PrimaryKey.FieldDescriptor.GetName()
-		pkValue := dm.GetFieldByName(pkFieldName)
-		if pkValue == nil {
-			return nil, fmt.Errorf("missing primary key field %q for table %q", pkFieldName, tableInfo.Name)
+	if table != nil {
+		tableName = table.Name
+		columns := g.getColumnsForTable(table)
+		columnIndex = g.columnIndexForTable(tableName)
+		if columnIndex == nil {
+			columnIndex = make(map[string]int, len(columns))
+			for i, name := range columns {
+				columnIndex[name] = i
+			}
+			if g.columnIndexes != nil {
+				g.columnIndexes[tableName] = columnIndex
+			}
 		}
-		fieldValues = append(fieldValues, pkValue)
-	}
+		rowValues = g.acquireRowBuffer(tableName, len(columns))
 
-	if parent != nil {
-		fieldValues = append(fieldValues, parent.id)
+		assignRowValue(rowValues, columnIndex, dialectBlockNumberName(g.dialect), blockNum)
+		assignRowValue(rowValues, columnIndex, dialectBlockTimestampName(g.dialect), blockTimestamp)
+
+		if g.dialect.UseVersionField() {
+			assignRowValue(rowValues, columnIndex, sql.DialectFieldVersion, time.Now().UnixNano())
+		}
+		if g.dialect.UseDeletedField() {
+			assignRowValue(rowValues, columnIndex, sql.DialectFieldDeleted, false)
+		}
+
+		if table.PrimaryKey != nil {
+			pkFieldName := table.PrimaryKey.FieldDescriptor.GetName()
+			pkValue = dm.GetFieldByName(pkFieldName)
+			if pkValue == nil {
+				g.releaseRowBuffer(tableName, rowValues)
+				return nil, fmt.Errorf("missing primary key field %q for table %q", pkFieldName, tableInfo.Name)
+			}
+			assignRowValue(rowValues, columnIndex, table.PrimaryKey.Name, pkValue)
+			pkDefined = true
+		}
+
+		if parent != nil && table.ChildOf != nil {
+			assignRowValue(rowValues, columnIndex, table.ChildOf.ParentTableField, parent.id)
+		}
 	}
 
 	var childs []*dynamic.Message
-	var fieldNames []string
 
-	// Collect field names in order
-	fieldNames = append(fieldNames, dialectBlockNumberName(g.dialect))
-	fieldNames = append(fieldNames, dialectBlockTimestampName(g.dialect))
-	if g.dialect.UseVersionField() {
-		fieldNames = append(fieldNames, sql.DialectFieldVersion)
-	}
-	if g.dialect.UseDeletedField() {
-		fieldNames = append(fieldNames, sql.DialectFieldDeleted)
-	}
-	if primaryKey != "" {
-		fieldNames = append(fieldNames, primaryKey)
-	}
-	// Add parent field name if we have a parent
-	// We'll figure out the actual column name later when we have table info
-	parentFieldIdx := -1
-	if parent != nil {
-		parentFieldIdx = len(fieldNames)
-		fieldNames = append(fieldNames, "") // Placeholder, will be updated later
-	}
-
-	// Walk all known fields
 	for _, fd := range dm.GetKnownFields() {
-		// Skip PK field by descriptor equality to handle renamed columns
-		if table != nil && table.PrimaryKey != nil {
-			if fd == table.PrimaryKey.FieldDescriptor {
-				continue
-			}
+		if table != nil && table.PrimaryKey != nil && fd == table.PrimaryKey.FieldDescriptor {
+			continue
 		}
 
 		fv := dm.GetField(fd)
 		if v, ok := fv.([]interface{}); ok {
-			// Repeated field - handle child messages
 			for _, c := range v {
 				fm, ok := c.(*dynamic.Message)
 				if !ok {
+					if rowValues != nil {
+						g.releaseRowBuffer(tableName, rowValues)
+					}
+					releaseAccumulated()
 					return nil, fmt.Errorf("Repeated fields with native values not supported yet in 'from-proto' mode. message %q, field %q", md.GetFullyQualifiedName(), fd.GetName())
 				}
 				childs = append(childs, fm)
 			}
 		} else if fm, ok := fv.(*dynamic.Message); ok {
 			if fm == nil {
-				continue //un-used oneOf field
+				continue // unused oneOf field
 			}
-			childs = append(childs, fm) //need to be handled after current message inserted
-		} else {
-			fieldValues = append(fieldValues, fv)
-			// Map to actual SQL column name if proto option renamed it
+			childs = append(childs, fm)
+		} else if rowValues != nil {
 			colName := fd.GetName()
-			if table != nil {
-				if renamed, ok := g.columnNameForField(table.Name, fd); ok {
-					colName = renamed
-				} else {
-					for _, c := range table.Columns {
-						if c.FieldDescriptor == fd {
-							colName = c.Name
-							break
-						}
+			if renamed, ok := g.columnNameForField(tableName, fd); ok {
+				colName = renamed
+			} else if table != nil {
+				for _, c := range table.Columns {
+					if c.FieldDescriptor == fd {
+						colName = c.Name
+						break
 					}
 				}
 			}
-			fieldNames = append(fieldNames, colName)
+			assignRowValue(rowValues, columnIndex, colName, fv)
 		}
 	}
 
 	var p *Parent
 
-	// Create row for this table if it has table info
-	if tableInfo != nil && table != nil {
-		// Update parent field name if this is a child table
-		if parentFieldIdx >= 0 && table.ChildOf != nil {
-			fieldNames[parentFieldIdx] = table.ChildOf.ParentTableField
-		}
-
-		// Create a map for this row
-		row := make(map[string]interface{})
-		for i, name := range fieldNames {
-			if i < len(fieldValues) && name != "" { // Skip empty placeholders
-				row[name] = fieldValues[i]
-			}
+	if tableInfo != nil && table != nil && rowValues != nil {
+		if len(childs) > 0 && g.useProtoOptions && table.PrimaryKey == nil {
+			g.releaseRowBuffer(tableName, rowValues)
+			return nil, fmt.Errorf("table %q has no primary key and has %d associated children table", table.Name, len(childs))
 		}
 
 		allRows = append(allRows, &tableRows{
-			tableName: table.Name,
-			rows:      []map[string]interface{}{row},
+			tableName: tableName,
+			rows:      [][]interface{}{rowValues},
 		})
 
-		// Set up parent for child tables
 		if len(childs) > 0 && g.useProtoOptions {
-			if table.PrimaryKey == nil {
-				return nil, fmt.Errorf("table %q has no primary key and has %d associated children table", table.Name, len(childs))
+			id := pkValue
+			if !pkDefined && table.PrimaryKey != nil {
+				if idx, ok := columnIndex[table.PrimaryKey.Name]; ok && idx < len(rowValues) {
+					id = rowValues[idx]
+				}
 			}
-			// Primary key value is always at primaryKeyOffset position in fieldValues
-			id := fieldValues[primaryKeyOffset]
 			p = &Parent{
 				field: strings.ToLower(md.GetName()),
 				id:    id,
 			}
 		}
+	} else if rowValues != nil {
+		g.releaseRowBuffer(tableName, rowValues)
 	}
 
-	// Process all child messages
 	for _, fm := range childs {
 		childRows, err := g.walkMessageAndCollectRows(fm, blockNum, blockTimestamp, p)
 		if err != nil {
+			releaseAccumulated()
 			return nil, fmt.Errorf("processing child %q: %w", fm.GetMessageDescriptor().GetFullyQualifiedName(), err)
 		}
 		allRows = append(allRows, childRows...)
@@ -1235,7 +1307,7 @@ func (g *protoAwareCSVGenerator) formatTimestamp(t time.Time) string {
 }
 
 // formatRowForCSV formats a row for CSV output
-func (g *protoAwareCSVGenerator) formatRowForCSV(row map[string]interface{}, table *schema.Table) []byte {
+func (g *protoAwareCSVGenerator) formatRowForCSV(row []interface{}, table *schema.Table) []byte {
 	columns := g.getColumnsForTable(table)
 	if len(columns) == 0 {
 		return []byte("\n")
@@ -1249,7 +1321,11 @@ func (g *protoAwareCSVGenerator) formatRowForCSV(row map[string]interface{}, tab
 		if i > 0 {
 			builder.WriteByte(',')
 		}
-		builder.WriteString(g.formatValue(row[col], col, table))
+		var cell interface{}
+		if i < len(row) {
+			cell = row[i]
+		}
+		builder.WriteString(g.formatValue(cell, col, table))
 	}
 
 	builder.WriteByte('\n')

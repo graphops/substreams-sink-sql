@@ -1,4 +1,5 @@
 package main
+
 // Note: file renamed to align with from-proto-generate-csv command
 
 import (
@@ -10,20 +11,20 @@ import (
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 // TestFieldValueAlignment validates that field names and values stay synchronized
 func TestFieldValueAlignment(t *testing.T) {
 	// This test validates Issue #1: Field arrays getting out of sync
-	
+
 	// Create a test message with multiple fields
 	msgProto := &descriptor.DescriptorProto{
 		Name: proto.String("TestMessage"),
@@ -56,7 +57,7 @@ func TestFieldValueAlignment(t *testing.T) {
 
 	msgDesc := fd.GetMessageTypes()[0]
 	dm := dynamic.NewMessage(msgDesc)
-	
+
 	// Set field values
 	dm.SetFieldByName("id", int64(123))
 	dm.SetFieldByName("name", "test_name")
@@ -105,80 +106,94 @@ func TestFieldValueAlignment(t *testing.T) {
 	rows, err := gen.walkMessageAndCollectRows(dm, 100, blockTime, nil)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	
+
 	row := rows[0].rows[0]
-	
+	columns := gen.getColumnsForTable(testTable)
+	mapped := make(map[string]interface{}, len(columns))
+	for i, col := range columns {
+		if i < len(row) {
+			mapped[col] = row[i]
+		}
+	}
+
 	// Validate that the correct values are mapped to correct fields
-	assert.Equal(t, uint64(100), row[sql.DialectFieldBlockNumber])
-	assert.Equal(t, blockTime, row[sql.DialectFieldBlockTimestamp])
-	assert.Equal(t, int64(123), row["id"])
-	assert.Equal(t, "test_name", row["name"])
-	assert.Equal(t, uint64(456), row["amount"])
+	assert.Equal(t, uint64(100), mapped[sql.DialectFieldBlockNumber])
+	assert.Equal(t, blockTime, mapped[sql.DialectFieldBlockTimestamp])
+	assert.Equal(t, int64(123), mapped["id"])
+	assert.Equal(t, "test_name", mapped["name"])
+	assert.Equal(t, uint64(456), mapped["amount"])
 }
 
 // TestFieldValueAlignment_RisingWave validates name/value alignment for RisingWave
 func TestFieldValueAlignment_RisingWave(t *testing.T) {
-    // Create a test message with multiple fields
-    msgProto := &descriptor.DescriptorProto{
-        Name: proto.String("TestMessage"),
-        Field: []*descriptor.FieldDescriptorProto{
-            { Name: proto.String("id"),     Number: proto.Int32(1), Type: descriptor.FieldDescriptorProto_TYPE_INT64.Enum() },
-            { Name: proto.String("name"),   Number: proto.Int32(2), Type: descriptor.FieldDescriptorProto_TYPE_STRING.Enum() },
-            { Name: proto.String("amount"), Number: proto.Int32(3), Type: descriptor.FieldDescriptorProto_TYPE_UINT64.Enum() },
-        },
-    }
+	// Create a test message with multiple fields
+	msgProto := &descriptor.DescriptorProto{
+		Name: proto.String("TestMessage"),
+		Field: []*descriptor.FieldDescriptorProto{
+			{Name: proto.String("id"), Number: proto.Int32(1), Type: descriptor.FieldDescriptorProto_TYPE_INT64.Enum()},
+			{Name: proto.String("name"), Number: proto.Int32(2), Type: descriptor.FieldDescriptorProto_TYPE_STRING.Enum()},
+			{Name: proto.String("amount"), Number: proto.Int32(3), Type: descriptor.FieldDescriptorProto_TYPE_UINT64.Enum()},
+		},
+	}
 
-    fileProto := &descriptor.FileDescriptorProto{ Name: proto.String("test.proto"), MessageType: []*descriptor.DescriptorProto{msgProto} }
-    fd, err := desc.CreateFileDescriptor(fileProto)
-    require.NoError(t, err)
-    msgDesc := fd.GetMessageTypes()[0]
-    dm := dynamic.NewMessage(msgDesc)
-    dm.SetFieldByName("id", int64(123))
-    dm.SetFieldByName("name", "test_name")
-    dm.SetFieldByName("amount", uint64(456))
+	fileProto := &descriptor.FileDescriptorProto{Name: proto.String("test.proto"), MessageType: []*descriptor.DescriptorProto{msgProto}}
+	fd, err := desc.CreateFileDescriptor(fileProto)
+	require.NoError(t, err)
+	msgDesc := fd.GetMessageTypes()[0]
+	dm := dynamic.NewMessage(msgDesc)
+	dm.SetFieldByName("id", int64(123))
+	dm.SetFieldByName("name", "test_name")
+	dm.SetFieldByName("amount", uint64(456))
 
-    // Build schema
-    testSchema := &schema.Schema{ Name: "test", TableRegistry: make(map[string]*schema.Table) }
-    idFd := createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_INT64)
-    nameFd := createSimpleFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
-    amountFd := createSimpleFieldDescriptor("amount", descriptor.FieldDescriptorProto_TYPE_UINT64)
-    testTable := &schema.Table{
-        Name: "TestMessage",
-        Columns: []*schema.Column{
-            { Name: "id",     IsPrimaryKey: true, FieldDescriptor: idFd },
-            { Name: "name",   FieldDescriptor: nameFd },
-            { Name: "amount", FieldDescriptor: amountFd },
-        },
-        PrimaryKey: &schema.PrimaryKey{ Name: "id", Index: 0, FieldDescriptor: idFd },
-    }
-    testSchema.TableRegistry["TestMessage"] = testTable
+	// Build schema
+	testSchema := &schema.Schema{Name: "test", TableRegistry: make(map[string]*schema.Table)}
+	idFd := createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_INT64)
+	nameFd := createSimpleFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)
+	amountFd := createSimpleFieldDescriptor("amount", descriptor.FieldDescriptorProto_TYPE_UINT64)
+	testTable := &schema.Table{
+		Name: "TestMessage",
+		Columns: []*schema.Column{
+			{Name: "id", IsPrimaryKey: true, FieldDescriptor: idFd},
+			{Name: "name", FieldDescriptor: nameFd},
+			{Name: "amount", FieldDescriptor: amountFd},
+		},
+		PrimaryKey: &schema.PrimaryKey{Name: "id", Index: 0, FieldDescriptor: idFd},
+	}
+	testSchema.TableRegistry["TestMessage"] = testTable
 
-    // Create RisingWave dialect
-    dialect, err := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
-    require.NoError(t, err)
+	// Create RisingWave dialect
+	dialect, err := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
+	require.NoError(t, err)
 
-    // Create generator
-    gen := &protoAwareCSVGenerator{ schema: testSchema, dialect: dialect, logger: zap.NewNop(), useProtoOptions: false }
+	// Create generator
+	gen := &protoAwareCSVGenerator{schema: testSchema, dialect: dialect, logger: zap.NewNop(), useProtoOptions: false}
 
-    // Collect rows
-    blockTime := time.Now()
-    rows, err := gen.walkMessageAndCollectRows(dm, 100, blockTime, nil)
-    require.NoError(t, err)
-    require.Len(t, rows, 1)
-    row := rows[0].rows[0]
+	// Collect rows
+	blockTime := time.Now()
+	rows, err := gen.walkMessageAndCollectRows(dm, 100, blockTime, nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	row := rows[0].rows[0]
+	columns := gen.getColumnsForTable(testTable)
+	mapped := make(map[string]interface{}, len(columns))
+	for i, col := range columns {
+		if i < len(row) {
+			mapped[col] = row[i]
+		}
+	}
 
-    // Validate dialect-specific keys were used
-    assert.Equal(t, uint64(100), row["block_number"])
-    assert.Equal(t, blockTime, row["block_timestamp"])
-    assert.Equal(t, int64(123), row["id"])
-    assert.Equal(t, "test_name", row["name"])
-    assert.Equal(t, uint64(456), row["amount"])
+	// Validate dialect-specific keys were used
+	assert.Equal(t, uint64(100), mapped["block_number"])
+	assert.Equal(t, blockTime, mapped["block_timestamp"])
+	assert.Equal(t, int64(123), mapped["id"])
+	assert.Equal(t, "test_name", mapped["name"])
+	assert.Equal(t, uint64(456), mapped["amount"])
 }
 
 // TestParentIDColumnInCSV validates that parent_id columns are included in CSV
 func TestParentIDColumnInCSV(t *testing.T) {
 	// This test validates Issue #4: Missing parent_id in CSV header
-	
+
 	// Create parent and child tables
 	testSchema := &schema.Schema{
 		Name:          "test",
@@ -246,16 +261,16 @@ func TestParentIDColumnInCSV(t *testing.T) {
 // TestBinaryDataFormatting validates binary data is formatted correctly for each dialect
 func TestBinaryDataFormatting(t *testing.T) {
 	// This test validates Issue #5: Binary data format for each dialect
-	
+
 	testSchema := &schema.Schema{
 		Name:          "test",
 		TableRegistry: make(map[string]*schema.Table),
 	}
-	
+
 	// Create proper field descriptors
 	idFd := createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_STRING)
 	dataFd := createSimpleFieldDescriptor("data", descriptor.FieldDescriptorProto_TYPE_BYTES)
-	
+
 	testTable := &schema.Table{
 		Name: "test",
 		Columns: []*schema.Column{
@@ -269,54 +284,54 @@ func TestBinaryDataFormatting(t *testing.T) {
 		},
 	}
 	testSchema.TableRegistry["test"] = testTable
-	
+
 	binaryData := []byte{0x01, 0x02, 0x03, 0xAB, 0xCD, 0xEF}
-	
+
 	// Test PostgreSQL dialect
 	t.Run("PostgreSQL", func(t *testing.T) {
 		pgDialect, err := postgres.NewDialectPostgres(testSchema, zap.NewNop())
 		require.NoError(t, err)
-		
+
 		gen := &protoAwareCSVGenerator{
 			logger:  zap.NewNop(),
 			dialect: pgDialect,
 			schema:  testSchema,
 		}
-		
+
 		formatted := gen.formatValue(binaryData, "data", testTable)
 		// PostgreSQL COPY expects \x followed by hex for bytea
 		expected := "\\x010203abcdef"
 		assert.Equal(t, expected, formatted, "Binary data should be formatted as PostgreSQL bytea")
 	})
-	
+
 	// Test ClickHouse dialect
 	t.Run("ClickHouse", func(t *testing.T) {
 		chDialect, err := clickhouse.NewDialectClickHouse(testSchema, zap.NewNop())
 		require.NoError(t, err)
-		
+
 		gen := &protoAwareCSVGenerator{
 			logger:  zap.NewNop(),
 			dialect: chDialect,
 			schema:  testSchema,
 		}
-		
+
 		formatted := gen.formatValue(binaryData, "data", testTable)
 		// ClickHouse CSV expects base64 encoded strings
 		expected := base64.StdEncoding.EncodeToString(binaryData)
 		assert.Equal(t, expected, formatted, "Binary data should be base64 encoded for ClickHouse")
 	})
-	
+
 	// Test RisingWave dialect
 	t.Run("RisingWave", func(t *testing.T) {
 		rwDialect, err := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
 		require.NoError(t, err)
-		
+
 		gen := &protoAwareCSVGenerator{
 			logger:  zap.NewNop(),
 			dialect: rwDialect,
 			schema:  testSchema,
 		}
-		
+
 		formatted := gen.formatValue(binaryData, "data", testTable)
 		// RisingWave uses PostgreSQL-compatible format
 		expected := "\\x010203abcdef"
@@ -350,10 +365,10 @@ newline"`},
 // TestPrimaryKeyIndexCalculation validates primary key value extraction
 func TestPrimaryKeyIndexCalculation(t *testing.T) {
 	// This test validates Issue #2: Parent ID index calculation
-	
+
 	// The primary key index should correctly identify the value position
 	// considering system fields and other offsets
-	
+
 	testSchema := &schema.Schema{
 		Name:          "test",
 		TableRegistry: make(map[string]*schema.Table),
@@ -380,7 +395,7 @@ func TestPrimaryKeyIndexCalculation(t *testing.T) {
 	// - version (if used)
 	// - deleted (if used)
 	// Then the primary key value
-	
+
 	// This needs careful validation of the index calculation
 	t.Log("Primary key index calculation needs validation in actual message processing")
 }
@@ -403,17 +418,17 @@ func TestNullValueHandling(t *testing.T) {
 // TestTableWithoutProtoOptions validates behavior when proto options aren't used
 func TestTableWithoutProtoOptions(t *testing.T) {
 	// This test validates Issue #6: Table info logic without proto options
-	
+
 	// When useProtoOptions is false, we create a default TableInfo
 	// But the dialect might not have a table for it
-	
+
 	testSchema := &schema.Schema{
 		Name:          "test",
 		TableRegistry: make(map[string]*schema.Table),
 	}
 
 	// Don't add any tables to the registry
-	
+
 	dialect, err := postgres.NewDialectPostgres(testSchema, zap.NewNop())
 	require.NoError(t, err)
 
@@ -451,7 +466,7 @@ func TestTableWithoutProtoOptions(t *testing.T) {
 	// This should not panic or error, but might not create any rows
 	rows, err := gen.walkMessageAndCollectRows(dm, 100, time.Now(), nil)
 	require.NoError(t, err)
-	
+
 	// Since there's no table in the registry, no rows should be created
 	assert.Len(t, rows, 0, "No rows should be created for unknown tables")
 }
