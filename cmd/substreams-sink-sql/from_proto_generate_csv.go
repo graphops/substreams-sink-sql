@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1235,14 +1237,23 @@ func (g *protoAwareCSVGenerator) formatTimestamp(t time.Time) string {
 // formatRowForCSV formats a row for CSV output
 func (g *protoAwareCSVGenerator) formatRowForCSV(row map[string]interface{}, table *schema.Table) []byte {
 	columns := g.getColumnsForTable(table)
-	values := make([]string, len(columns))
-
-	for i, col := range columns {
-		value := row[col]
-		values[i] = g.formatValue(value, col, table)
+	if len(columns) == 0 {
+		return []byte("\n")
 	}
 
-	return []byte(strings.Join(values, ",") + "\n")
+	var builder strings.Builder
+	// Pre-size builder to avoid repeated growth; assume average 16 bytes per column.
+	builder.Grow(len(columns) * 16)
+
+	for i, col := range columns {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(g.formatValue(row[col], col, table))
+	}
+
+	builder.WriteByte('\n')
+	return []byte(builder.String())
 }
 
 // formatValue formats a value for CSV based on its SQL type
@@ -1253,7 +1264,10 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 
 	// Handle system columns
 	if columnName == sql.DialectFieldBlockNumber || columnName == "block_number" {
-		return fmt.Sprintf("%d", value)
+		if formatted, ok := formatIntegral(value); ok {
+			return formatted
+		}
+		return fmt.Sprint(value)
 	}
 	if columnName == sql.DialectFieldBlockTimestamp || columnName == "block_timestamp" {
 		if t, ok := value.(time.Time); ok {
@@ -1261,7 +1275,10 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 		}
 	}
 	if columnName == sql.DialectFieldVersion {
-		return fmt.Sprintf("%d", value)
+		if formatted, ok := formatIntegral(value); ok {
+			return formatted
+		}
+		return fmt.Sprint(value)
 	}
 	if columnName == sql.DialectFieldDeleted {
 		if b, ok := value.(bool); ok {
@@ -1274,7 +1291,7 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 
 	// Handle foreign key columns (parent references)
 	if strings.HasSuffix(columnName, "_id") {
-		return escapeCSVValue(fmt.Sprintf("%v", value))
+		return escapeCSVValue(fmt.Sprint(value))
 	}
 
 	// Handle table columns
@@ -1288,7 +1305,7 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 
 	if column == nil {
 		// System column or unknown - escape and return
-		return escapeCSVValue(fmt.Sprintf("%v", value))
+		return escapeCSVValue(fmt.Sprint(value))
 	}
 
 	// Format based on actual value type
@@ -1312,12 +1329,30 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 			return g.formatTimestamp(*v)
 		}
 		return ""
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", v)
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", v)
-	case float32, float64:
-		return fmt.Sprintf("%g", v) // %g removes trailing zeros
+	case int:
+		return strconv.FormatInt(int64(v), 10)
+	case int8:
+		return strconv.FormatInt(int64(v), 10)
+	case int16:
+		return strconv.FormatInt(int64(v), 10)
+	case int32:
+		return strconv.FormatInt(int64(v), 10)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case uint:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint64:
+		return strconv.FormatUint(v, 10)
+	case float32:
+		return strconv.FormatFloat(float64(v), 'g', -1, 32)
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64)
 	case *string:
 		if v != nil {
 			return escapeCSVValue(*v)
@@ -1329,7 +1364,7 @@ func (g *protoAwareCSVGenerator) formatValue(value interface{}, columnName strin
 			return ""
 		}
 		// For any other types, convert to string and escape
-		return escapeCSVValue(fmt.Sprintf("%v", value))
+		return escapeCSVValue(fmt.Sprint(value))
 	}
 }
 
@@ -1353,14 +1388,41 @@ func (g *protoAwareCSVGenerator) formatBinaryData(data []byte) string {
 	case "postgres", "risingwave":
 		// PostgreSQL and RisingWave COPY CSV format expects \xHEX
 		// The backslash is literal in the CSV (not escaped)
-		return fmt.Sprintf("\\x%x", data)
+		return "\\x" + hex.EncodeToString(data)
 	case "clickhouse":
 		// ClickHouse CSV imports work better with base64 encoded strings
 		// This can be decoded using base64Decode() function in ClickHouse
 		return base64.StdEncoding.EncodeToString(data)
 	default:
 		// Default to PostgreSQL format
-		return fmt.Sprintf("\\x%x", data)
+		return "\\x" + hex.EncodeToString(data)
+	}
+}
+
+func formatIntegral(value interface{}) (string, bool) {
+	switch v := value.(type) {
+	case int:
+		return strconv.FormatInt(int64(v), 10), true
+	case int8:
+		return strconv.FormatInt(int64(v), 10), true
+	case int16:
+		return strconv.FormatInt(int64(v), 10), true
+	case int32:
+		return strconv.FormatInt(int64(v), 10), true
+	case int64:
+		return strconv.FormatInt(v, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint64:
+		return strconv.FormatUint(v, 10), true
+	default:
+		return "", false
 	}
 }
 
