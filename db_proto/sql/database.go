@@ -131,7 +131,10 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 
 	var childs []*dynamic.Message
 
-	for _, fd := range dm.GetKnownFields() {
+	for _, fd := range md.GetFields() {
+		if fd.GetOneOf() != nil && !dm.HasField(fd) {
+			continue
+		}
 		// Skip the PK using descriptor equality, resilient to column renames
 		if tableInfo != nil {
 			if table := dialect.GetTable(tableInfo.Name); table != nil && table.PrimaryKey != nil {
@@ -155,13 +158,13 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 					}
 				} else {
 					// Array of native values - normalize each element before storing
-					normalized := make([]interface{}, len(v))
-					for idx, elem := range v {
+					normalized := make([]interface{}, 0, len(v))
+					for _, elem := range v {
 						converted, err := NormalizeValue(fd, elem)
 						if err != nil {
 							return 0, fmt.Errorf("normalizing repeated field %q: %w", fd.GetName(), err)
 						}
-						normalized[idx] = converted
+						normalized = append(normalized, converted)
 					}
 					fieldValues = append(fieldValues, normalized)
 				}
@@ -180,7 +183,7 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 		}
 	}
 
-	var p *Parent
+	p := parent
 
 	if tableInfo != nil {
 		insertStartAt := time.Now()
@@ -192,19 +195,17 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 				return 0, fmt.Errorf("inserting into table %q: %w", table.Name, err)
 			}
 			if len(childs) > 0 && d.useProtoOptions {
-				if table.PrimaryKey == nil {
-					return 0, fmt.Errorf("table %q has no primary key and has %d associated children table", table.Name, len(childs))
-				}
-				// Use the actual primary key value we fetched above. Using the
-				// descriptor index to compute its position within fieldValues is
-				// incorrect because fieldValues does not mirror the proto field
-				// ordering (we prepend block metadata, optionally add parent id,
-				// and we skipped the PK when iterating fields). This previously
-				// caused index out-of-range panics like: index 8 with length 6.
-				id := primaryKeyValue
-				p = &Parent{
-					field: strings.ToLower(md.GetName()),
-					id:    id,
+				if table.PrimaryKey != nil {
+					// Use the actual primary key value we fetched above. Using the descriptor
+					// index to compute its position within fieldValues is incorrect because
+					// fieldValues does not mirror the proto field ordering.
+					id := primaryKeyValue
+					p = &Parent{
+						field: strings.ToLower(md.GetName()),
+						id:    id,
+					}
+				} else if parent == nil {
+					return 0, fmt.Errorf("table %q has no primary key to propagate to %d children", table.Name, len(childs))
 				}
 			}
 			totalSqlDuration += time.Since(insertStartAt)

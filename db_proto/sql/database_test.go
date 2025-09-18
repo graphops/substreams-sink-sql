@@ -11,6 +11,8 @@ import (
 	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
 	pbSchema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	pbRelations "github.com/streamingfast/substreams-sink-sql/pb/test/relations"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/types/descriptorpb"
@@ -237,6 +239,7 @@ func TestWalkMessageDescriptor_NormalizesSemanticTimestamp(t *testing.T) {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
 	values := rows[0]
+	t.Logf("captured b_value values: %#v", values)
 	if len(values) < 3 {
 		t.Fatalf("expected at least 3 columns, got %d", len(values))
 	}
@@ -251,4 +254,197 @@ func TestWalkMessageDescriptor_NormalizesSemanticTimestamp(t *testing.T) {
 	if !gotTime.Equal(wantTime) {
 		t.Fatalf("normalized time mismatch: got %v want %v", gotTime, wantTime)
 	}
+}
+
+func TestWalkMessageDescriptor_ChildOfAncestorOneofHasCompleteArguments(t *testing.T) {
+	// Build descriptors mirroring the stability pool snippet
+	fieldID := &descriptorpb.FieldDescriptorProto{
+		Name:   proto.String("id"),
+		Number: proto.Int32(1),
+		Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		Options: func() *descriptorpb.FieldOptions {
+			opts := &descriptorpb.FieldOptions{}
+			if err := proto.SetExtension(opts, pbSchema.E_Field, &pbSchema.Column{PrimaryKey: true}); err != nil {
+				t.Fatalf("set field option: %v", err)
+			}
+			return opts
+		}(),
+	}
+
+	bValueField := func(name string, number int32) *descriptorpb.FieldDescriptorProto {
+		opts := &descriptorpb.FieldOptions{}
+		if err := proto.SetExtension(opts, pbSchema.E_Field, &pbSchema.Column{SemanticType: proto.String("uint256")}); err != nil {
+			t.Fatalf("set semantic option: %v", err)
+		}
+		return &descriptorpb.FieldDescriptorProto{
+			Name:    proto.String(name),
+			Number:  proto.Int32(number),
+			Type:    descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+			Options: opts,
+		}
+	}
+
+	bValueUpdate := &descriptorpb.DescriptorProto{
+		Name: proto.String("BValueUpdate"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			bValueField("b_value", 1),
+			bValueField("scale", 2),
+		},
+		Options: func() *descriptorpb.MessageOptions {
+			opts := &descriptorpb.MessageOptions{}
+			if err := proto.SetExtension(opts, pbSchema.E_Table, &pbSchema.Table{
+				Name:    "stability_pool_b_value_updates",
+				ChildOf: proto.String("stability_pool_operations on id"),
+			}); err != nil {
+				t.Fatalf("set table option: %v", err)
+			}
+			return opts
+		}(),
+	}
+
+	sValueUpdate := &descriptorpb.DescriptorProto{
+		Name: proto.String("SValueUpdate"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			bValueField("s_value", 1),
+			bValueField("scale", 2),
+		},
+		// no table option required for this test
+	}
+
+	stabilityUpdate := &descriptorpb.DescriptorProto{
+		Name: proto.String("StabilityPoolUpdate"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			{
+				Name:       proto.String("p_value"),
+				Number:     proto.Int32(1),
+				Type:       descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				OneofIndex: proto.Int32(0),
+			},
+			{
+				Name:       proto.String("s_value"),
+				Number:     proto.Int32(2),
+				Type:       descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				TypeName:   proto.String(".test.contract.SValueUpdate"),
+				OneofIndex: proto.Int32(0),
+			},
+			{
+				Name:       proto.String("b_value"),
+				Number:     proto.Int32(3),
+				Type:       descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				TypeName:   proto.String(".test.contract.BValueUpdate"),
+				OneofIndex: proto.Int32(0),
+			},
+			{
+				Name:       proto.String("scale"),
+				Number:     proto.Int32(4),
+				Type:       descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				OneofIndex: proto.Int32(0),
+			},
+		},
+		Options: func() *descriptorpb.MessageOptions {
+			opts := &descriptorpb.MessageOptions{}
+			if err := proto.SetExtension(opts, pbSchema.E_Table, &pbSchema.Table{
+				Name:    "stability_pool_updates",
+				ChildOf: proto.String("stability_pool_operations on id"),
+			}); err != nil {
+				t.Fatalf("set table option: %v", err)
+			}
+			return opts
+		}(),
+		OneofDecl: []*descriptorpb.OneofDescriptorProto{
+			{Name: proto.String("update_type")},
+		},
+	}
+
+	operation := &descriptorpb.DescriptorProto{
+		Name: proto.String("StabilityPoolOperation"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			fieldID,
+			{
+				Name:     proto.String("updates"),
+				Number:   proto.Int32(2),
+				Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				TypeName: proto.String(".test.contract.StabilityPoolUpdate"),
+				Label:    descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+			},
+		},
+		Options: func() *descriptorpb.MessageOptions {
+			opts := &descriptorpb.MessageOptions{}
+			if err := proto.SetExtension(opts, pbSchema.E_Table, &pbSchema.Table{Name: "stability_pool_operations"}); err != nil {
+				t.Fatalf("set table option: %v", err)
+			}
+			return opts
+		}(),
+	}
+
+	fileProto := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("stability_pool.proto"),
+		Package: proto.String("test.contract"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			operation,
+			stabilityUpdate,
+			sValueUpdate,
+			bValueUpdate,
+		},
+	}
+
+	fd, err := desc.CreateFileDescriptor(fileProto)
+	if err != nil {
+		t.Fatalf("create file descriptor: %v", err)
+	}
+	opMD := fd.FindMessage("test.contract.StabilityPoolOperation")
+	if opMD == nil {
+		t.Fatalf("operation descriptor not found")
+	}
+
+	zlog := zap.NewNop()
+	sch, err := schema.NewSchema("test_schema", opMD, true, zlog)
+	if err != nil {
+		t.Fatalf("new schema: %v", err)
+	}
+	if _, ok := sch.TableRegistry["stability_pool_b_value_updates"]; !ok {
+		t.Fatalf("expected stability_pool_b_value_updates table in registry")
+	}
+
+	dialect := &testDialect{BaseDialect: NewBaseDialect(sch.TableRegistry, zlog)}
+
+	baseDB, err := NewBaseDatabase("test.contract.StabilityPoolOperation", opMD, true, zlog)
+	if err != nil {
+		t.Fatalf("new base db: %v", err)
+	}
+
+	operationMsg := dynamic.NewMessage(opMD)
+	require.NoError(t, operationMsg.TrySetFieldByName("id", "op-1"))
+
+	bValueMD := fd.FindMessage("test.contract.BValueUpdate")
+	require.NotNil(t, bValueMD)
+	bValueMsg := dynamic.NewMessage(bValueMD)
+	require.NoError(t, bValueMsg.TrySetFieldByName("b_value", "123"))
+	// Deliberately leave "scale" unset to ensure NULL handling still produces full argument list
+
+	updateMD := fd.FindMessage("test.contract.StabilityPoolUpdate")
+	require.NotNil(t, updateMD)
+	updateMsg := dynamic.NewMessage(updateMD)
+	require.NoError(t, updateMsg.TrySetFieldByName("b_value", bValueMsg))
+
+	require.NoError(t, operationMsg.TrySetFieldByName("updates", []any{updateMsg}))
+
+	cap := &captureInserter{}
+
+	bValueTable := sch.TableRegistry["stability_pool_b_value_updates"]
+	require.NotNil(t, bValueTable)
+	require.NotNil(t, bValueTable.ChildOf)
+
+	_, err = baseDB.WalkMessageDescriptorAndInsertWithDialect(operationMsg, 42, time.Unix(100, 0), nil, dialect, cap)
+	require.NoError(t, err)
+	rows := cap.rows["stability_pool_b_value_updates"]
+	require.Len(t, rows, 1, "expected one b_value update row")
+
+	values := rows[0]
+	require.Len(t, values, 5, "expected values for all columns including parent id")
+	assert.Equal(t, uint64(42), values[0])
+	assert.Equal(t, time.Unix(100, 0), values[1])
+	assert.Equal(t, "op-1", values[2], "parent id should propagate")
+	assert.Equal(t, "123", values[3])
+	assert.Equal(t, "", values[4], "scale should default to empty string when unset")
 }

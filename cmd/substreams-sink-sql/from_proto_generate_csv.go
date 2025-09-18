@@ -1213,7 +1213,10 @@ func (g *protoAwareCSVGenerator) walkMessageAndCollectRows(dm *dynamic.Message, 
 
 	var childs []*dynamic.Message
 
-	for _, fd := range dm.GetKnownFields() {
+	for _, fd := range dm.GetMessageDescriptor().GetFields() {
+		if fd.GetOneOf() != nil && !dm.HasField(fd) {
+			continue
+		}
 		if table != nil && table.PrimaryKey != nil && fd == table.PrimaryKey.FieldDescriptor {
 			continue
 		}
