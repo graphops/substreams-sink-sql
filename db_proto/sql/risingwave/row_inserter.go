@@ -55,8 +55,8 @@ func (i *RowInserter) init(database *Database) error {
 	}
 	insertStatements["_blocks_"] = bs
 
-    // Use plain INSERT; RisingWave static DDL does not use ON CONFLICT clauses.
-    insertQueries["_cursor_"] = fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2)", tableName(database.schema.Name, "_cursor_"))
+	// Use plain INSERT; RisingWave static DDL does not use ON CONFLICT clauses.
+	insertQueries["_cursor_"] = fmt.Sprintf("INSERT INTO %s (name, cursor) VALUES ($1, $2)", tableName(database.schema.Name, "_cursor_"))
 	cs, err := database.db.Prepare(insertQueries["_cursor_"])
 	if err != nil {
 		return fmt.Errorf("preparing statement %q: %w", insertQueries["_cursor_"], err)
@@ -142,8 +142,16 @@ func (i *RowInserter) insert(table string, values []any, database *Database) err
 			values[i] = strconv.FormatUint(v, 10)
 		case []uint8:
 			values[i] = base64.StdEncoding.EncodeToString(v)
+		case time.Time:
+			values[i] = v.UTC()
+		case *time.Time:
+			if v == nil {
+				values[i] = nil
+				continue
+			}
+			values[i] = v.UTC()
 		case *timestamppb.Timestamp:
-			values[i] = "'" + v.AsTime().Format(time.RFC3339) + "'"
+			values[i] = v.AsTime().UTC()
 		case []interface{}:
 			// Convert to PostgreSQL/RisingWave array literal: {elem1,elem2,...}
 			var elements []string

@@ -1,17 +1,18 @@
 package risingwave
 
 import (
-    "encoding/hex"
-    "fmt"
-    "strconv"
-    "strings"
-    "time"
+	"encoding/hex"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
-    "github.com/golang/protobuf/protoc-gen-go/descriptor"
-    "github.com/jhump/protoreflect/desc"
-    sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
-    "github.com/streamingfast/substreams-sink-sql/proto"
-    "google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/golang/protobuf/protoc-gen-go/descriptor"
+	"github.com/jhump/protoreflect/desc"
+	sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
+	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
+	"github.com/streamingfast/substreams-sink-sql/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type DataType string
@@ -100,60 +101,60 @@ func SupportsSemanticType(semanticType sql2.SemanticType) bool {
 }
 
 func MapFieldType(fd *desc.FieldDescriptor) DataType {
-    // First, attempt semantic mapping to get the base type
-    if semanticType, _, hasSemanticType := proto.SemanticTypeInfo(fd); hasSemanticType {
-        if sqlType, supported := MapSemanticType(sql2.SemanticType(semanticType)); supported {
-            base := DataType(sqlType)
-            if fd.IsRepeated() {
-                return DataType(fmt.Sprintf("%s[]", base))
-            }
-            return base
-        }
-        // Fall through to default mapping if semantic type not supported
-    }
+	// First, attempt semantic mapping to get the base type
+	if semanticType, _, hasSemanticType := proto.SemanticTypeInfo(fd); hasSemanticType {
+		if sqlType, supported := MapSemanticType(sql2.SemanticType(semanticType)); supported {
+			base := DataType(sqlType)
+			if fd.IsRepeated() {
+				return DataType(fmt.Sprintf("%s[]", base))
+			}
+			return base
+		}
+		// Fall through to default mapping if semantic type not supported
+	}
 
-    // Default protobuf type mapping to determine the base type
-    var baseType DataType
-    switch fd.GetType() {
-    case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
-        switch fd.GetMessageType().GetFullyQualifiedName() {
-        case "google.protobuf.Timestamp":
-            baseType = TypeTimestamptz // Use timestamptz for protobuf timestamps
-        default:
-            panic(fmt.Sprintf("Message type not supported: %s", fd.GetMessageType().GetFullyQualifiedName()))
-        }
-    case descriptor.FieldDescriptorProto_TYPE_BOOL:
-        baseType = TypeBool
-    case descriptor.FieldDescriptorProto_TYPE_INT32, descriptor.FieldDescriptorProto_TYPE_SINT32, descriptor.FieldDescriptorProto_TYPE_SFIXED32:
-        baseType = TypeInteger
-    case descriptor.FieldDescriptorProto_TYPE_INT64, descriptor.FieldDescriptorProto_TYPE_SINT64, descriptor.FieldDescriptorProto_TYPE_SFIXED64:
-        baseType = TypeBigInt
-    case descriptor.FieldDescriptorProto_TYPE_UINT64, descriptor.FieldDescriptorProto_TYPE_FIXED64:
-        baseType = TypeNumeric // Use NUMERIC for large unsigned integers
-    case descriptor.FieldDescriptorProto_TYPE_UINT32, descriptor.FieldDescriptorProto_TYPE_FIXED32:
-        baseType = TypeBigInt // Use BIGINT for 32-bit unsigned (to avoid overflow)
-    case descriptor.FieldDescriptorProto_TYPE_FLOAT:
-        baseType = TypeReal // Use REAL for single precision
-    case descriptor.FieldDescriptorProto_TYPE_DOUBLE:
-        baseType = TypeDouble
-    case descriptor.FieldDescriptorProto_TYPE_STRING:
-        baseType = TypeVarchar
-    case descriptor.FieldDescriptorProto_TYPE_BYTES:
-        baseType = TypeBytea // Use BYTEA for binary data
-    case descriptor.FieldDescriptorProto_TYPE_ENUM:
-        baseType = TypeVarchar // Store enums as varchar
-    default:
-        panic(fmt.Sprintf("unsupported type: %s", fd.GetType()))
-    }
+	// Default protobuf type mapping to determine the base type
+	var baseType DataType
+	switch fd.GetType() {
+	case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+		switch fd.GetMessageType().GetFullyQualifiedName() {
+		case "google.protobuf.Timestamp":
+			baseType = TypeTimestamptz // Use timestamptz for protobuf timestamps
+		default:
+			panic(fmt.Sprintf("Message type not supported: %s", fd.GetMessageType().GetFullyQualifiedName()))
+		}
+	case descriptor.FieldDescriptorProto_TYPE_BOOL:
+		baseType = TypeBool
+	case descriptor.FieldDescriptorProto_TYPE_INT32, descriptor.FieldDescriptorProto_TYPE_SINT32, descriptor.FieldDescriptorProto_TYPE_SFIXED32:
+		baseType = TypeInteger
+	case descriptor.FieldDescriptorProto_TYPE_INT64, descriptor.FieldDescriptorProto_TYPE_SINT64, descriptor.FieldDescriptorProto_TYPE_SFIXED64:
+		baseType = TypeBigInt
+	case descriptor.FieldDescriptorProto_TYPE_UINT64, descriptor.FieldDescriptorProto_TYPE_FIXED64:
+		baseType = TypeNumeric // Use NUMERIC for large unsigned integers
+	case descriptor.FieldDescriptorProto_TYPE_UINT32, descriptor.FieldDescriptorProto_TYPE_FIXED32:
+		baseType = TypeBigInt // Use BIGINT for 32-bit unsigned (to avoid overflow)
+	case descriptor.FieldDescriptorProto_TYPE_FLOAT:
+		baseType = TypeReal // Use REAL for single precision
+	case descriptor.FieldDescriptorProto_TYPE_DOUBLE:
+		baseType = TypeDouble
+	case descriptor.FieldDescriptorProto_TYPE_STRING:
+		baseType = TypeVarchar
+	case descriptor.FieldDescriptorProto_TYPE_BYTES:
+		baseType = TypeBytea // Use BYTEA for binary data
+	case descriptor.FieldDescriptorProto_TYPE_ENUM:
+		baseType = TypeVarchar // Store enums as varchar
+	default:
+		panic(fmt.Sprintf("unsupported type: %s", fd.GetType()))
+	}
 
-    if fd.IsRepeated() {
-        return DataType(fmt.Sprintf("%s[]", baseType))
-    }
-    return baseType
+	if fd.IsRepeated() {
+		return DataType(fmt.Sprintf("%s[]", baseType))
+	}
+	return baseType
 }
 
 func ValueToString(value any) (s string) {
-    switch v := value.(type) {
+	switch v := value.(type) {
 	case string:
 		s = "'" + strings.ReplaceAll(strings.ReplaceAll(v, "'", "''"), "\\", "\\\\") + "'"
 	case int64:
@@ -179,22 +180,20 @@ func ValueToString(value any) (s string) {
 	case bool:
 		s = strconv.FormatBool(v)
 	case time.Time:
-		// Use RFC3339 format for timestamps
-		s = "'" + v.Format(time.RFC3339) + "'"
-    case *timestamppb.Timestamp:
-        // Convert protobuf timestamp to timestamptz format
-        s = "'" + v.AsTime().Format(time.RFC3339) + "'"
-    // Handle array types for RisingWave (PostgreSQL-compatible array literals)
-    case []interface{}:
-        var elements []string
-        for _, elem := range v {
-            elements = append(elements, ValueToString(elem))
-        }
-        s = "{" + strings.Join(elements, ",") + "}"
-    default:
-        panic(fmt.Sprintf("unsupported type: %T", v))
-    }
-    return
+		s = "'" + timefmt.FormatRisingWave(v) + "'"
+	case *timestamppb.Timestamp:
+		s = "'" + timefmt.FormatRisingWave(v.AsTime()) + "'"
+	// Handle array types for RisingWave (PostgreSQL-compatible array literals)
+	case []interface{}:
+		var elements []string
+		for _, elem := range v {
+			elements = append(elements, ValueToString(elem))
+		}
+		s = "{" + strings.Join(elements, ",") + "}"
+	default:
+		panic(fmt.Sprintf("unsupported type: %T", v))
+	}
+	return
 }
 
 // ConvertSemanticValue converts a value according to semantic type and format hint for RisingWave
@@ -402,5 +401,5 @@ func convertUnixTimestamp(value interface{}, isMilliseconds bool) (string, error
 		return "", fmt.Errorf("cannot convert %T to timestamp", value)
 	}
 
-	return "'" + t.UTC().Format(time.RFC3339) + "'", nil
+	return "'" + timefmt.FormatRisingWave(t) + "'", nil
 }

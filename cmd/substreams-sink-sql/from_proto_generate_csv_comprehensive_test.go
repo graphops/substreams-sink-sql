@@ -1,4 +1,5 @@
 package main
+
 // Note: file renamed to align with from-proto-generate-csv command
 
 import (
@@ -11,20 +12,21 @@ import (
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/click_house"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/postgres"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
+	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 // TestParentChildRelationships validates parent-child table relationships
 func TestParentChildRelationships(t *testing.T) {
 	logger := zap.NewNop()
-	
+
 	// Create parent and child message descriptors
 	parentMsgProto := &descriptor.DescriptorProto{
 		Name: proto.String("Orders"),
@@ -125,7 +127,7 @@ func TestParentChildRelationships(t *testing.T) {
 
 	// Test 1: Child table CSV should include parent column
 	columns := gen.getColumnsForTable(orderItemsTable)
-	
+
 	// Should have: _block_number_, _block_timestamp_, item_id, order_id, product_name
 	expectedColumns := []string{
 		sql.DialectFieldBlockNumber,
@@ -134,7 +136,7 @@ func TestParentChildRelationships(t *testing.T) {
 		"order_id",     // Parent reference
 		"product_name", // Regular column
 	}
-	
+
 	assert.Equal(t, expectedColumns, columns, "Child table should include parent reference column")
 
 	// Test 2: Parent table primary key extraction
@@ -151,7 +153,7 @@ func TestParentChildRelationships(t *testing.T) {
 
 	// Test walking with parent context
 	blockTime := time.Now()
-	
+
 	// Walk parent message
 	parentRows, err := gen.walkMessageAndCollectRows(dm, 100, blockTime, nil)
 	require.NoError(t, err)
@@ -243,7 +245,7 @@ func TestBinaryDataFormattingAllDialects(t *testing.T) {
 // TestPrimaryKeyValueExtraction validates that primary key value is extracted correctly
 func TestPrimaryKeyValueExtraction(t *testing.T) {
 	// This tests the fix for the parent ID extraction bug
-	
+
 	// Create a message with fields
 	msgProto := &descriptor.DescriptorProto{
 		Name: proto.String("TestMessage"),
@@ -321,11 +323,11 @@ func TestPrimaryKeyValueExtraction(t *testing.T) {
 	// The primary key value should be at primaryKeyOffset position
 	// With just block_number and block_timestamp, primaryKeyOffset = 2
 	// So fieldValues[2] should be "PK-VALUE-123"
-	
+
 	blockTime := time.Now()
 	_, err = gen.walkMessageAndCollectRows(dm, 100, blockTime, nil)
 	require.NoError(t, err)
-	
+
 	// Verify the primary key was extracted correctly
 	// Note: Since we're using useProtoOptions: false, it will create default TableInfo
 	t.Log("Primary key extraction index validated")
@@ -355,7 +357,7 @@ func TestCSVColumnOrdering(t *testing.T) {
 					{Name: "name", FieldDescriptor: createSimpleFieldDescriptor("name", descriptor.FieldDescriptorProto_TYPE_STRING)},
 				},
 				PrimaryKey: &schema.PrimaryKey{
-					Name: "id",
+					Name:            "id",
 					FieldDescriptor: createSimpleFieldDescriptor("id", descriptor.FieldDescriptorProto_TYPE_STRING),
 				},
 			},
@@ -375,7 +377,7 @@ func TestCSVColumnOrdering(t *testing.T) {
 					{Name: "data", FieldDescriptor: createSimpleFieldDescriptor("data", descriptor.FieldDescriptorProto_TYPE_STRING)},
 				},
 				PrimaryKey: &schema.PrimaryKey{
-					Name: "child_id",
+					Name:            "child_id",
 					FieldDescriptor: createSimpleFieldDescriptor("child_id", descriptor.FieldDescriptorProto_TYPE_STRING),
 				},
 				ChildOf: &schema.ChildOf{
@@ -399,7 +401,7 @@ func TestCSVColumnOrdering(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Clear registry for each test
 			testSchema.TableRegistry = make(map[string]*schema.Table)
-			
+
 			// Add parent table if this is a child table
 			if tc.table.ChildOf != nil {
 				parentFd := createSimpleFieldDescriptor("parent_id", descriptor.FieldDescriptorProto_TYPE_STRING)
@@ -415,9 +417,9 @@ func TestCSVColumnOrdering(t *testing.T) {
 				}
 				testSchema.TableRegistry[tc.table.ChildOf.ParentTable] = parentTable
 			}
-			
+
 			testSchema.TableRegistry[tc.table.Name] = tc.table
-			
+
 			dialect, err := postgres.NewDialectPostgres(testSchema, zap.NewNop())
 			require.NoError(t, err)
 
@@ -471,7 +473,7 @@ func TestRepeatedFieldsError(t *testing.T) {
 		Name:          "test",
 		TableRegistry: make(map[string]*schema.Table),
 	}
-	
+
 	dialect, err := postgres.NewDialectPostgres(testSchema, zap.NewNop())
 	require.NoError(t, err)
 
@@ -524,9 +526,9 @@ func TestCSVRowFormatting(t *testing.T) {
 	row := map[string]interface{}{
 		sql.DialectFieldBlockNumber:    uint64(12345),
 		sql.DialectFieldBlockTimestamp: blockTime,
-		"text_field":                    "Hello, \"World\"",
-		"int_field":                     int64(42),
-		"bool_field":                    true,
+		"text_field":                   "Hello, \"World\"",
+		"int_field":                    int64(42),
+		"bool_field":                   true,
 	}
 
 	csvData := gen.formatRowForCSV(row, testTable)
@@ -535,6 +537,53 @@ func TestCSVRowFormatting(t *testing.T) {
 	// Expected CSV format
 	expected := fmt.Sprintf(`12345,%s,"Hello, ""World""",42,true`, blockTime.Format(time.RFC3339)) + "\n"
 	assert.Equal(t, expected, csvString, "CSV row should be properly formatted")
+}
+
+func TestCSVRowFormattingRisingWaveTimestamp(t *testing.T) {
+	testSchema := &schema.Schema{
+		Name:          "test",
+		TableRegistry: make(map[string]*schema.Table),
+	}
+
+	textFd := createSimpleFieldDescriptor("text_field", descriptor.FieldDescriptorProto_TYPE_STRING)
+	intFd := createSimpleFieldDescriptor("int_field", descriptor.FieldDescriptorProto_TYPE_INT64)
+	boolFd := createSimpleFieldDescriptor("bool_field", descriptor.FieldDescriptorProto_TYPE_BOOL)
+
+	testTable := &schema.Table{
+		Name: "test_table",
+		Columns: []*schema.Column{
+			{Name: "text_field", FieldDescriptor: textFd},
+			{Name: "int_field", FieldDescriptor: intFd},
+			{Name: "bool_field", FieldDescriptor: boolFd},
+		},
+	}
+
+	testSchema.TableRegistry["test_table"] = testTable
+
+	dialect, err := risingwave.NewDialectRisingwave(testSchema.Name, testSchema.TableRegistry, zap.NewNop())
+	require.NoError(t, err)
+
+	gen := &protoAwareCSVGenerator{
+		schema:  testSchema,
+		dialect: dialect,
+		logger:  zap.NewNop(),
+	}
+
+	blockTime := time.Date(2024, time.January, 15, 10, 30, 0, 987000000, time.FixedZone("UTC-5", -5*3600))
+	row := map[string]interface{}{
+		sql.DialectFieldBlockNumber:    uint64(12345),
+		sql.DialectFieldBlockTimestamp: blockTime,
+		"text_field":                   "Hello, \"World\"",
+		"int_field":                    int64(42),
+		"bool_field":                   true,
+	}
+
+	csvData := gen.formatRowForCSV(row, testTable)
+	csvString := string(csvData)
+
+	expectedTimestamp := timefmt.FormatRisingWave(blockTime)
+	expected := fmt.Sprintf(`12345,%s,"Hello, ""World""",42,true`, expectedTimestamp) + "\n"
+	assert.Equal(t, expected, csvString, "RisingWave CSV should use canonical timestamp layout")
 }
 
 // TestNullHandling validates NULL value handling in CSV
@@ -565,11 +614,11 @@ func TestCompleteIntegration(t *testing.T) {
 		Name: proto.String("DatabaseChanges"),
 		Field: []*descriptor.FieldDescriptorProto{
 			{
-				Name:   proto.String("orders"),
-				Number: proto.Int32(1),
-				Type:   descriptor.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				Name:     proto.String("orders"),
+				Number:   proto.Int32(1),
+				Type:     descriptor.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
 				TypeName: proto.String(".Orders"),
-				Label:  descriptor.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+				Label:    descriptor.FieldDescriptorProto_LABEL_REPEATED.Enum(),
 			},
 		},
 	}
@@ -583,11 +632,11 @@ func TestCompleteIntegration(t *testing.T) {
 				Type:   descriptor.FieldDescriptorProto_TYPE_STRING.Enum(),
 			},
 			{
-				Name:   proto.String("items"),
-				Number: proto.Int32(2),
-				Type:   descriptor.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				Name:     proto.String("items"),
+				Number:   proto.Int32(2),
+				Type:     descriptor.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
 				TypeName: proto.String(".OrderItems"),
-				Label:  descriptor.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+				Label:    descriptor.FieldDescriptorProto_LABEL_REPEATED.Enum(),
 			},
 		},
 	}
@@ -699,8 +748,8 @@ func createSimpleFieldDescriptor(name string, fieldType descriptor.FieldDescript
 		Field: []*descriptor.FieldDescriptorProto{fdp},
 	}
 
-    testFDSeq++
-    fileName := fmt.Sprintf("test_%s_%d.proto", name, testFDSeq)
+	testFDSeq++
+	fileName := fmt.Sprintf("test_%s_%d.proto", name, testFDSeq)
 	fdProto := &descriptor.FileDescriptorProto{
 		Name:        &fileName,
 		MessageType: []*descriptor.DescriptorProto{mdp},

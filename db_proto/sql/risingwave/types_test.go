@@ -5,6 +5,7 @@ import (
 	"time"
 
 	sql2 "github.com/streamingfast/substreams-sink-sql/db_proto/sql"
+	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -45,7 +46,7 @@ func TestValueToString(t *testing.T) {
 		{"empty bytes", []uint8{}, "'\\x'"},
 
 		// Time values
-		{"time", time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC), "'2023-01-15T10:30:00Z'"},
+		{"time", time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC), "'2023-01-15 10:30:00.000000+00:00'"},
 	}
 
 	for _, tt := range tests {
@@ -61,7 +62,16 @@ func TestValueToStringTimestamp(t *testing.T) {
 	testTime := time.Date(2023, 1, 15, 10, 30, 0, 0, time.UTC)
 	pbTime := timestamppb.New(testTime)
 	result := ValueToString(pbTime)
-	assert.Equal(t, "'2023-01-15T10:30:00Z'", result)
+	assert.Equal(t, "'2023-01-15 10:30:00.000000+00:00'", result)
+
+	// Non-UTC timestamp should be converted to UTC before formatting
+	nonUTCTime := time.Date(2023, 1, 15, 10, 30, 0, 987000000, time.FixedZone("UTC-5", -5*3600))
+	result = ValueToString(nonUTCTime)
+	assert.Equal(t, "'"+timefmt.FormatRisingWave(nonUTCTime)+"'", result)
+
+	pbNonUTC := timestamppb.New(nonUTCTime)
+	result = ValueToString(pbNonUTC)
+	assert.Equal(t, "'"+timefmt.FormatRisingWave(pbNonUTC.AsTime())+"'", result)
 }
 
 func TestValueToStringPanic(t *testing.T) {

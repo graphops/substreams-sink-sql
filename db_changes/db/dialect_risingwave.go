@@ -14,6 +14,7 @@ import (
 
 	"github.com/streamingfast/cli"
 	sink "github.com/streamingfast/substreams-sink"
+	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
 	"go.uber.org/zap"
 	"golang.org/x/exp/maps"
 )
@@ -237,6 +238,12 @@ func (d RisingwaveDialect) GetAllCursorsQuery(table string) string {
 }
 
 func (d RisingwaveDialect) ParseDatetimeNormalization(value string) string {
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return escapeStringValue(timefmt.FormatRisingWave(parsed))
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return escapeStringValue(timefmt.FormatRisingWave(parsed))
+	}
 	return escapeStringValue(value)
 }
 
@@ -501,7 +508,7 @@ func (d *RisingwaveDialect) normalizeValueType(value string, valueType reflect.T
 					return "", fmt.Errorf("could not convert %s to int: %w", value, err)
 				}
 
-				return escapeStringValue(time.Unix(int64(i), 0).Format(time.RFC3339)), nil
+				return escapeStringValue(timefmt.FormatRisingWave(time.Unix(int64(i), 0))), nil
 			}
 
 			// It's a plain string, parse by dialect it and pass it to the databaseName

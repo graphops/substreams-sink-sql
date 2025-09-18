@@ -138,8 +138,16 @@ func (i *RowInserter) insert(table string, values []any, database *Database) err
 			values[i] = strconv.FormatUint(v, 10)
 		case []uint8:
 			values[i] = base64.StdEncoding.EncodeToString(v)
+		case time.Time:
+			values[i] = v.UTC()
+		case *time.Time:
+			if v == nil {
+				values[i] = nil
+				continue
+			}
+			values[i] = v.UTC()
 		case *timestamppb.Timestamp:
-			values[i] = "'" + v.AsTime().Format(time.RFC3339) + "'"
+			values[i] = v.AsTime().UTC()
 		case []interface{}:
 			// Handle arrays by converting to PostgreSQL array format
 			var elements []string
