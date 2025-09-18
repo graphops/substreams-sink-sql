@@ -41,7 +41,7 @@ func TestValueConversion(t *testing.T) {
 		{"uint64", uint64(456), "456"},
 		{"bool true", true, "true"},
 		{"bool false", false, "false"},
-		{"time", time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), "'2023-01-01T00:00:00Z'"},
+		{"time", time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), "'2023-01-01 00:00:00.000000+00:00'"},
 		{"bytes", []byte{0xDE, 0xAD}, "'\\xDEAD'"},
 	}
 
