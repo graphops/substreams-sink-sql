@@ -571,11 +571,11 @@ func TestCSVRowFormattingRisingWaveTimestamp(t *testing.T) {
 
 	blockTime := time.Date(2024, time.January, 15, 10, 30, 0, 987000000, time.FixedZone("UTC-5", -5*3600))
 	row := map[string]interface{}{
-		sql.DialectFieldBlockNumber:    uint64(12345),
-		sql.DialectFieldBlockTimestamp: blockTime,
-		"text_field":                   "Hello, \"World\"",
-		"int_field":                    int64(42),
-		"bool_field":                   true,
+		dialectBlockNumberName(dialect):    uint64(12345),
+		dialectBlockTimestampName(dialect): blockTime,
+		"text_field":                       "Hello, \"World\"",
+		"int_field":                        int64(42),
+		"bool_field":                       true,
 	}
 
 	csvData := gen.formatRowForCSV(row, testTable)

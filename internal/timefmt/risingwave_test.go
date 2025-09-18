@@ -6,8 +6,8 @@ import (
 )
 
 func TestFormatRisingWave(t *testing.T) {
-	t := time.Date(2025, time.September, 18, 15, 18, 52, 123456789, time.FixedZone("UTC-4", -4*3600))
-	got := FormatRisingWave(t)
+	ts := time.Date(2025, time.September, 18, 15, 18, 52, 123456789, time.FixedZone("UTC-4", -4*3600))
+	got := FormatRisingWave(ts)
 	want := "2025-09-18 19:18:52.123456+00:00"
 	if got != want {
 		t.Fatalf("FormatRisingWave() = %q, want %q", got, want)
