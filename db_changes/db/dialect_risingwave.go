@@ -247,6 +247,21 @@ func (d RisingwaveDialect) ParseDatetimeNormalization(value string) string {
 	return escapeStringValue(value)
 }
 
+func (d RisingwaveDialect) GetTableColumns(db *sql.DB, schemaName, tableName string) ([]*sql.ColumnType, error) {
+	query := fmt.Sprintf("SELECT * FROM %s.%s WHERE 1=0",
+		EscapeIdentifier(schemaName),
+		EscapeIdentifier(tableName),
+	)
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("querying table structure: %w", err)
+	}
+	defer rows.Close()
+
+	return rows.ColumnTypes()
+}
+
 func (d RisingwaveDialect) DriverSupportRowsAffected() bool {
 	return true
 }

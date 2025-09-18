@@ -1248,7 +1248,13 @@ func (g *protoAwareCSVGenerator) walkMessageAndCollectRows(dm *dynamic.Message, 
 					}
 				}
 			}
-			assignRowValue(rowValues, columnIndex, colName, fv)
+			converted, err := sql.NormalizeValue(fd, fv)
+			if err != nil {
+				g.releaseRowBuffer(tableName, rowValues)
+				releaseAccumulated()
+				return nil, fmt.Errorf("normalizing field %q: %w", fd.GetName(), err)
+			}
+			assignRowValue(rowValues, columnIndex, colName, converted)
 		}
 	}
 

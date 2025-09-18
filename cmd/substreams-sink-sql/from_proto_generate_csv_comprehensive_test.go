@@ -18,6 +18,7 @@ import (
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/risingwave"
 	"github.com/streamingfast/substreams-sink-sql/db_proto/sql/schema"
 	"github.com/streamingfast/substreams-sink-sql/internal/timefmt"
+	pbSchema "github.com/streamingfast/substreams-sink-sql/pb/sf/substreams/sink/sql/schema/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -596,6 +597,80 @@ func TestCSVRowFormattingRisingWaveTimestamp(t *testing.T) {
 	expectedTimestamp := timefmt.FormatRisingWave(blockTime)
 	expected := fmt.Sprintf(`12345,%s,"Hello, ""World""",42,true`, expectedTimestamp) + "\n"
 	assert.Equal(t, expected, csvString, "RisingWave CSV should use canonical timestamp layout")
+}
+
+func TestCSVSemanticTimestampNormalization(t *testing.T) {
+	field := &descriptor.FieldDescriptorProto{
+		Name:    proto.String("event_time"),
+		Number:  proto.Int32(1),
+		Type:    descriptor.FieldDescriptorProto_TYPE_STRING.Enum(),
+		Options: &descriptor.FieldOptions{},
+	}
+	if err := proto.SetExtension(field.Options, pbSchema.E_Field, &pbSchema.Column{SemanticType: proto.String(string(sql.SemanticBlockTimestamp))}); err != nil {
+		t.Fatalf("set field extension: %v", err)
+	}
+
+	msgOpts := &descriptor.MessageOptions{}
+	if err := proto.SetExtension(msgOpts, pbSchema.E_Table, &pbSchema.Table{Name: "events"}); err != nil {
+		t.Fatalf("set table extension: %v", err)
+	}
+
+	msgProto := &descriptor.DescriptorProto{
+		Name:    proto.String("Event"),
+		Field:   []*descriptor.FieldDescriptorProto{field},
+		Options: msgOpts,
+	}
+	fileProto := &descriptor.FileDescriptorProto{
+		Name:        proto.String("semantic_event.proto"),
+		Package:     proto.String("test.semantic"),
+		MessageType: []*descriptor.DescriptorProto{msgProto},
+	}
+
+	fd, err := desc.CreateFileDescriptor(fileProto)
+	require.NoError(t, err)
+	md := fd.FindMessage("test.semantic.Event")
+	require.NotNil(t, md)
+
+	zlog := zap.NewNop()
+	sch, err := schema.NewSchema("test_schema", md, true, zlog)
+	require.NoError(t, err)
+
+	dialect, err := risingwave.NewDialectRisingwave(sch.Name, sch.TableRegistry, zlog)
+	require.NoError(t, err)
+
+	gen := &protoAwareCSVGenerator{
+		schema:          sch,
+		dialect:         dialect,
+		logger:          zlog,
+		useProtoOptions: true,
+	}
+
+	dm := dynamic.NewMessage(md)
+	const rawValue = "2025-09-18T18:24:17.806811415Z"
+	require.NoError(t, dm.TrySetFieldByName("event_time", rawValue))
+
+	rows, err := gen.walkMessageAndCollectRows(dm, 12345, time.Unix(0, 0), nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Len(t, rows[0].rows, 1)
+	values := rows[0].rows[0]
+	require.GreaterOrEqual(t, len(values), 3)
+
+	eventTime, ok := values[2].(time.Time)
+	if !ok {
+		t.Fatalf("expected time.Time, got %T", values[2])
+	}
+	wantTime, err := timefmt.ParseTimestamp(rawValue)
+	require.NoError(t, err)
+	if !eventTime.Equal(wantTime) {
+		t.Fatalf("unexpected normalization: got %v want %v", eventTime, wantTime)
+	}
+
+	table := sch.TableRegistry["events"]
+	require.NotNil(t, table)
+	formatted := string(gen.formatRowForCSV(values, table))
+	expectedEvent := timefmt.FormatRisingWave(wantTime)
+	assert.Contains(t, formatted, expectedEvent, "CSV output should contain normalized event_time")
 }
 
 // TestNullHandling validates NULL value handling in CSV

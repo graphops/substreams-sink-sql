@@ -105,23 +105,23 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 	}
 
 	d.logger.Debug("Walking message descriptor", zap.String("message_descriptor_name", md.GetName()), zap.Any("table_info", tableInfo))
-    // Keep the actual PK value handy so we don't rely on slice indexes later
-    var primaryKeyValue any
-    if tableInfo != nil {
-        if table := dialect.GetTable(tableInfo.Name); table != nil {
-            if table.PrimaryKey != nil {
-                // Robust PK retrieval: always use the original protobuf field name
-                // from the descriptor (not the possibly renamed SQL column name).
-                pkFieldName := table.PrimaryKey.FieldDescriptor.GetName()
-                pkValue := dm.GetFieldByName(pkFieldName)
-                if pkValue == nil {
-                    return 0, fmt.Errorf("missing primary key field %q for table %q", pkFieldName, tableInfo.Name)
-                }
-                fieldValues = append(fieldValues, pkValue)
-                primaryKeyValue = pkValue
-            }
-        }
-    }
+	// Keep the actual PK value handy so we don't rely on slice indexes later
+	var primaryKeyValue any
+	if tableInfo != nil {
+		if table := dialect.GetTable(tableInfo.Name); table != nil {
+			if table.PrimaryKey != nil {
+				// Robust PK retrieval: always use the original protobuf field name
+				// from the descriptor (not the possibly renamed SQL column name).
+				pkFieldName := table.PrimaryKey.FieldDescriptor.GetName()
+				pkValue := dm.GetFieldByName(pkFieldName)
+				if pkValue == nil {
+					return 0, fmt.Errorf("missing primary key field %q for table %q", pkFieldName, tableInfo.Name)
+				}
+				fieldValues = append(fieldValues, pkValue)
+				primaryKeyValue = pkValue
+			}
+		}
+	}
 
 	totalSqlDuration := time.Duration(0)
 
@@ -131,17 +131,17 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 
 	var childs []*dynamic.Message
 
-    for _, fd := range dm.GetKnownFields() {
-        // Skip the PK using descriptor equality, resilient to column renames
-        if tableInfo != nil {
-            if table := dialect.GetTable(tableInfo.Name); table != nil && table.PrimaryKey != nil {
-                if fd == table.PrimaryKey.FieldDescriptor {
-                    continue
-                }
-            }
-        }
-        fv := dm.GetField(fd)
-        if v, ok := fv.([]interface{}); ok {
+	for _, fd := range dm.GetKnownFields() {
+		// Skip the PK using descriptor equality, resilient to column renames
+		if tableInfo != nil {
+			if table := dialect.GetTable(tableInfo.Name); table != nil && table.PrimaryKey != nil {
+				if fd == table.PrimaryKey.FieldDescriptor {
+					continue
+				}
+			}
+		}
+		fv := dm.GetField(fd)
+		if v, ok := fv.([]interface{}); ok {
 			// Check if this is an array of messages or native values
 			if len(v) > 0 {
 				if _, ok := v[0].(*dynamic.Message); ok {
@@ -154,8 +154,16 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 						childs = append(childs, fm)
 					}
 				} else {
-					// Array of native values - add as a single field value (the array itself)
-					fieldValues = append(fieldValues, fv)
+					// Array of native values - normalize each element before storing
+					normalized := make([]interface{}, len(v))
+					for idx, elem := range v {
+						converted, err := NormalizeValue(fd, elem)
+						if err != nil {
+							return 0, fmt.Errorf("normalizing repeated field %q: %w", fd.GetName(), err)
+						}
+						normalized[idx] = converted
+					}
+					fieldValues = append(fieldValues, normalized)
 				}
 			}
 		} else if fm, ok := fv.(*dynamic.Message); ok {
@@ -164,7 +172,11 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 			}
 			childs = append(childs, fm) //need to be handled after current message inserted
 		} else {
-			fieldValues = append(fieldValues, fv)
+			converted, err := NormalizeValue(fd, fv)
+			if err != nil {
+				return 0, fmt.Errorf("normalizing field %q: %w", fd.GetName(), err)
+			}
+			fieldValues = append(fieldValues, converted)
 		}
 	}
 
@@ -179,22 +191,22 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 				fmt.Println("field values:", fieldValues)
 				return 0, fmt.Errorf("inserting into table %q: %w", table.Name, err)
 			}
-            if len(childs) > 0 && d.useProtoOptions {
-                if table.PrimaryKey == nil {
-                    return 0, fmt.Errorf("table %q has no primary key and has %d associated children table", table.Name, len(childs))
-                }
-                // Use the actual primary key value we fetched above. Using the
-                // descriptor index to compute its position within fieldValues is
-                // incorrect because fieldValues does not mirror the proto field
-                // ordering (we prepend block metadata, optionally add parent id,
-                // and we skipped the PK when iterating fields). This previously
-                // caused index out-of-range panics like: index 8 with length 6.
-                id := primaryKeyValue
-                p = &Parent{
-                    field: strings.ToLower(md.GetName()),
-                    id:    id,
-                }
-            }
+			if len(childs) > 0 && d.useProtoOptions {
+				if table.PrimaryKey == nil {
+					return 0, fmt.Errorf("table %q has no primary key and has %d associated children table", table.Name, len(childs))
+				}
+				// Use the actual primary key value we fetched above. Using the
+				// descriptor index to compute its position within fieldValues is
+				// incorrect because fieldValues does not mirror the proto field
+				// ordering (we prepend block metadata, optionally add parent id,
+				// and we skipped the PK when iterating fields). This previously
+				// caused index out-of-range panics like: index 8 with length 6.
+				id := primaryKeyValue
+				p = &Parent{
+					field: strings.ToLower(md.GetName()),
+					id:    id,
+				}
+			}
 			totalSqlDuration += time.Since(insertStartAt)
 		}
 	}
