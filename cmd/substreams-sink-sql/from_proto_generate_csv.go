@@ -711,6 +711,7 @@ type protoAwareCSVGenerator struct {
 	schema          *schema.Schema
 	dialect         sql.Dialect
 	rootDescriptor  protoreflect.MessageDescriptor
+	rootMessage     *dynamic.Message
 	outputDir       string
 	workingDir      string
 	bundleSize      uint64
@@ -758,6 +759,16 @@ func newProtoAwareCSVGenerator(
 		logger:          logger,
 		useProtoOptions: useProtoOptions,
 	}
+
+	if rootDescriptor == nil {
+		return nil, fmt.Errorf("root descriptor cannot be nil")
+	}
+
+	wrappedRootDesc, err := desc.WrapMessage(rootDescriptor)
+	if err != nil {
+		return nil, fmt.Errorf("wrapping root message descriptor: %w", err)
+	}
+	gen.rootMessage = dynamic.NewMessage(wrappedRootDesc)
 
 	// Create output directory
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -915,13 +926,21 @@ func (g *protoAwareCSVGenerator) HandleBlockScopedData(ctx context.Context, data
 		return nil
 	}
 
-	// Create dynamic message from our root descriptor
-	rootDesc, err := desc.WrapMessage(g.rootDescriptor)
-	if err != nil {
-		return fmt.Errorf("wrapping message descriptor: %w", err)
+	// Create or reuse dynamic message from our root descriptor
+	msg := g.rootMessage
+	if msg == nil {
+		if g.rootDescriptor == nil {
+			return fmt.Errorf("root message descriptor is not configured")
+		}
+		wrappedRootDesc, err := desc.WrapMessage(g.rootDescriptor)
+		if err != nil {
+			return fmt.Errorf("wrapping message descriptor: %w", err)
+		}
+		msg = dynamic.NewMessage(wrappedRootDesc)
+		g.rootMessage = msg
 	}
 
-	msg := dynamic.NewMessage(rootDesc)
+	msg.Reset()
 	if err := msg.Unmarshal(mapOutput.Value); err != nil {
 		return fmt.Errorf("unmarshaling message: %w", err)
 	}
