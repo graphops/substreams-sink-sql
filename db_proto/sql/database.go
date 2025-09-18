@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	sink "github.com/streamingfast/substreams-sink"
@@ -107,8 +108,13 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 	d.logger.Debug("Walking message descriptor", zap.String("message_descriptor_name", md.GetName()), zap.Any("table_info", tableInfo))
 	// Keep the actual PK value handy so we don't rely on slice indexes later
 	var primaryKeyValue any
+	var columnDescriptors map[*desc.FieldDescriptor]struct{}
 	if tableInfo != nil {
 		if table := dialect.GetTable(tableInfo.Name); table != nil {
+			columnDescriptors = make(map[*desc.FieldDescriptor]struct{}, len(table.Columns))
+			for _, col := range table.Columns {
+				columnDescriptors[col.FieldDescriptor] = struct{}{}
+			}
 			if table.PrimaryKey != nil {
 				// Robust PK retrieval: always use the original protobuf field name
 				// from the descriptor (not the possibly renamed SQL column name).
@@ -139,6 +145,14 @@ func (d *BaseDatabase) WalkMessageDescriptorAndInsertWithDialect(dm *dynamic.Mes
 		if tableInfo != nil {
 			if table := dialect.GetTable(tableInfo.Name); table != nil && table.PrimaryKey != nil {
 				if fd == table.PrimaryKey.FieldDescriptor {
+					continue
+				}
+			}
+		}
+
+		if fd.GetType() != descriptor.FieldDescriptorProto_TYPE_MESSAGE {
+			if columnDescriptors != nil {
+				if _, ok := columnDescriptors[fd]; !ok {
 					continue
 				}
 			}
